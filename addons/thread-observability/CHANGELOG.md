@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+- Publish ports 8099 (core API) and 8100 (MCP) to the HA host so VS Code's MCP client can reach them from the LAN
+- Previously the ports were declared as `null` (internal only), making `http://<ha-host>:8100/mcp` unreachable from outside the container
+
 ## 0.3.0
 
 - Added Supervisor-backed MCP tools to close the VS Code dev loop:

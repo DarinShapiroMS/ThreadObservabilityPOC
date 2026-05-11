@@ -1,5 +1,5 @@
 name: Thread Observability
-version: 0.3.0
+version: 0.3.1
 slug: thread-observability
 description: Observe and troubleshoot Thread network health in Home Assistant.
 url: https://github.com/DarinShapiroMS/ThreadObservabilityPOC/tree/main/addons/thread-observability
@@ -14,8 +14,8 @@ homeassistant_api: true
 hassio_api: true
 hassio_role: manager
 ports:
-  8099/tcp: null
-  8100/tcp: null
+  8099/tcp: 8099
+  8100/tcp: 8100
 ports_description:
   8099/tcp: Thread Observability API and UI
   8100/tcp: Thread Observability MCP API
