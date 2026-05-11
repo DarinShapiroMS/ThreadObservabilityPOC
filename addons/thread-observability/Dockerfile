@@ -15,11 +15,10 @@ WORKDIR /opt/thread-observability
 COPY app/ /opt/thread-observability/app/
 COPY rootfs/ /
 
-RUN sed -i 's/\r$//' /etc/cont-init.d/00-init.sh \
-        /etc/s6-overlay/s6-rc.d/core/run \
-        /etc/s6-overlay/s6-rc.d/mcp/run && \
-    chmod 755 /etc/cont-init.d/00-init.sh \
-              /etc/s6-overlay/s6-rc.d/core/run \
+RUN mkdir -p /data/thread-observability && \
+    sed -i 's/\r$//' /etc/s6-overlay/s6-rc.d/core/run \
+                     /etc/s6-overlay/s6-rc.d/mcp/run && \
+    chmod 755 /etc/s6-overlay/s6-rc.d/core/run \
               /etc/s6-overlay/s6-rc.d/mcp/run && \
     pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir /opt/thread-observability/app

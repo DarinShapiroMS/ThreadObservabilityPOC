@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4
+
+- Removed cont-init.d entirely to eliminate legacy-cont-init and legacy-services shims
+- Moved runtime directory creation to Dockerfile RUN step
+- Both legacy s6-overlay shims now have nothing to process, eliminating suexec PID 1 crash
+
 ## 0.1.3
 
 - Migrated from legacy services.d to native s6-overlay v3 s6-rc.d service format
