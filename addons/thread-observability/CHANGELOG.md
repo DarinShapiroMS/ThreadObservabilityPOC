@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0
+
+- Switched base image from `ghcr.io/home-assistant/{arch}-base:3.20` to `ghcr.io/hassio-addons/base:20.1.1`
+- Fixes persistent `s6-overlay-suexec: fatal: can only run as pid 1` crash loop
+- Root cause: the low-level HA base image ships a buggy legacy-services compatibility shim; the community addon base (used by ~200 official community addons) is purpose-built for s6-rc.d native services
+- Removed `legacy-services` bundle override and empty `services.d/` placeholder (no longer needed)
+- Removed `rm -rf /etc/cont-init.d` workaround from Dockerfile
+- Dropped `bash` from apk install (provided by base image)
+
 ## 0.1.9
 
 - Override base image's buggy legacy-services bundle with a noop s6-rc.d bundle (empty contents.d)
