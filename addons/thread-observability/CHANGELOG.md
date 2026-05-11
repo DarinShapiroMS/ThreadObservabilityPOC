@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.7
+
+- Added explicit `rm -rf /etc/cont-init.d /etc/services.d` in Dockerfile to eliminate Docker layer cache issues
+- Forces removal of legacy HA s6-overlay compatibility layer directories that cause cascade crashes
+
 ## 0.1.6
 
 - Added rotating file logger to /data/thread-observability/addon.log (2 MB, 2 backups)
