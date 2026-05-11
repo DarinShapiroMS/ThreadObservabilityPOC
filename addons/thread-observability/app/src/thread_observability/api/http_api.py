@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse
 from . import supervisor_client
 from ..config import get_config
 from ..health import build_health_snapshot
+from ..pipeline import nodes as nodes_mod
 from ..pipeline import otbr_adapter
 from ..pipeline import reasoner as reasoner_mod
 from ..pipeline import seed as seed_mod
@@ -26,7 +27,7 @@ from ..storage.sqlite_store import get_store
 
 log = logging.getLogger(__name__)
 
-ADDON_VERSION = "0.8.0"
+ADDON_VERSION = "0.9.0"
 LOG_PATH = Path("/data/thread-observability/addon.log")
 
 
@@ -134,6 +135,26 @@ DASHBOARD_HTML = """<!doctype html>
         <button onclick="listCandidates()">List OTBR add-ons</button>
       </div>
       <pre id="ing-out" class="muted" style="margin-top:.5rem;max-height:140px">(no action yet)</pre>
+    </div>
+
+    <div class="card wide">
+      <h2>Thread Nodes</h2>
+      <table style="width:100%;border-collapse:collapse;font-size:.9rem">
+        <thead style="border-bottom:1px solid #d1d5db">
+          <tr>
+            <th style="text-align:left;padding:.5rem"># ID</th>
+            <th style="text-align:left;padding:.5rem">Name</th>
+            <th style="text-align:left;padding:.5rem">Role</th>
+            <th style="text-align:center;padding:.5rem">RSSI</th>
+            <th style="text-align:center;padding:.5rem">LQI</th>
+            <th style="text-align:center;padding:.5rem">Status</th>
+            <th style="text-align:left;padding:.5rem">Last Seen</th>
+          </tr>
+        </thead>
+        <tbody id="nodes-tbody">
+          <tr><td colspan="7" class="muted" style="padding:.5rem">loading…</td></tr>
+        </tbody>
+      </table>
     </div>
 
     <div class="card wide">
@@ -313,6 +334,30 @@ async function refresh() {
       last_run_at: ing.last_run_at || '—',
       last_error: ing.last_error || '—',
     });
+
+    const allNodes = s.all_nodes || [];
+    const tbody = document.getElementById('nodes-tbody');
+    if (allNodes.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="muted" style="padding:.5rem">(no nodes yet; use Seed demo or enable OTBR ingestion)</td></tr>';
+    } else {
+      tbody.innerHTML = allNodes.map(function(n) {
+        const statusPill = '<span class="pill ' + (n.status === 'healthy' ? 'ok' : n.status === 'stale' ? 'warn' : 'err') + '">'
+                          + (n.status || '?') + '</span>';
+        const lastSeen = n.last_seen ? new Date(n.last_seen).toLocaleString() : '—';
+        const sig = (n.signal_strength || {});
+        const rssi = sig.rssi !== null && sig.rssi !== undefined ? sig.rssi + ' dBm' : '—';
+        const lqi = sig.lqi !== null && sig.lqi !== undefined ? sig.lqi : '—';
+        return '<tr style="border-bottom:1px solid #e5e7eb">'
+               + '<td style="padding:.5rem"><code style="font-size:.8em">' + (n.eui64 || '?').slice(-4).toUpperCase() + '</code></td>'
+               + '<td style="padding:.5rem">' + (n.friendly_name || n.display_name || '?') + '</td>'
+               + '<td style="padding:.5rem">' + (n.role || '?') + '</td>'
+               + '<td style="text-align:center;padding:.5rem">' + rssi + '</td>'
+               + '<td style="text-align:center;padding:.5rem">' + lqi + '</td>'
+               + '<td style="text-align:center;padding:.5rem">' + statusPill + '</td>'
+               + '<td style="padding:.5rem;font-size:.8em">' + lastSeen + '</td>'
+               + '</tr>';
+      }).join('');
+    }
   } catch (e) {
     document.getElementById('logs').textContent = 'Error: ' + e.message;
   }
@@ -432,6 +477,10 @@ def create_core_app() -> FastAPI:
             ingestion = otbr_adapter.get_state()
         except Exception as exc:  # noqa: BLE001
             ingestion = {"error": str(exc)}
+        try:
+            all_nodes = nodes_mod.list_nodes_enriched(include_signal_strength=True)
+        except Exception as exc:  # noqa: BLE001
+            all_nodes = []
         return {
             "addon_version": ADDON_VERSION,
             "checked_at": _utc_now(),
@@ -444,6 +493,7 @@ def create_core_app() -> FastAPI:
             "timeseries": ts_health,
             "config": cfg,
             "ingestion": ingestion,
+            "all_nodes": all_nodes,
         }
 
     @app.get("/v1/dev/mcp-health")
@@ -486,6 +536,36 @@ def create_core_app() -> FastAPI:
             return {"error": "slug required"}
         try:
             return otbr_adapter.set_slug(slug)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
+    # -- Node metadata (Phase 3) ------------------------------------------
+
+    @app.get("/v1/nodes/all")
+    def nodes_list() -> dict[str, object]:
+        try:
+            nodes = nodes_mod.list_nodes_enriched(include_signal_strength=True)
+            return {"count": len(nodes), "nodes": nodes}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc), "nodes": []}
+
+    @app.get("/v1/nodes/{eui64}")
+    def nodes_get(eui64: str) -> dict[str, object]:
+        try:
+            return nodes_mod.get_node_summary(eui64, include_signal_strength=True)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
+    @app.post("/v1/nodes/{eui64}/friendly-name")
+    def nodes_set_name(eui64: str, payload: dict[str, str]) -> dict[str, object]:
+        name = (payload or {}).get("name", "").strip()
+        if not name:
+            return {"error": "name required"}
+        try:
+            ok = get_store().set_node_friendly_name(eui64, name)
+            if not ok:
+                return {"error": f"node {eui64} not found"}
+            return nodes_mod.get_node_summary(eui64, include_signal_strength=True)
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 

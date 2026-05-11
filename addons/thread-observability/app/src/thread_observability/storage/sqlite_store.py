@@ -247,6 +247,32 @@ class SQLiteStore:
             ).fetchone()
         return dict(row) if row else None
 
+    def list_nodes(self) -> list[dict[str, Any]]:
+        """Return all nodes ordered by last_seen DESC."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM nodes ORDER BY last_seen DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_node_by_friendly_name(self, name: str) -> dict[str, Any] | None:
+        """Lookup a node by its friendly_name (case-insensitive)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM nodes WHERE LOWER(friendly_name) = LOWER(?)",
+                (name,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def set_node_friendly_name(self, eui64: str, friendly_name: str) -> bool:
+        """Set or update the friendly_name for a node. Returns True if updated."""
+        with self._tx() as conn:
+            cur = conn.execute(
+                "UPDATE nodes SET friendly_name = ? WHERE eui64 = ?",
+                (friendly_name, eui64),
+            )
+            return cur.rowcount > 0
+
     # -- stats ---------------------------------------------------------
 
     def stats(self) -> dict[str, Any]:

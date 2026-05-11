@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0 — Phase 3: Node-friendly names and device discovery
+
+- **Node metadata enrichment** (`pipeline/nodes.py`): compute node status (healthy/stale/offline) based on event recency, extract latest RSSI/LQI signal strength, display human-readable names alongside EUI64 hex.
+- **SQLite helpers** extended: `list_nodes()`, `get_node_by_friendly_name()`, `set_node_friendly_name()` for local name management.
+- **HA device registry lookup** (`supervisor_client.get_ha_device_registry()`): best-effort fetch from Home Assistant's device registry for future auto-mapping.
+- **New MCP tools** (28 total, +3): `get_node_metadata`, `set_node_friendly_name`, `list_all_nodes` (all include RSSI/LQI samples and status inference).
+- **New REST endpoints** (6 new, /v1/nodes/*): `GET /v1/nodes/all`, `GET /v1/nodes/{eui64}`, `POST /v1/nodes/{eui64}/friendly-name`.
+- **Dashboard "Thread Nodes" card**: sortable table showing node #ID (last 4 hex digits), friendly name, role, RSSI/LQI, status badge, last-seen timestamp. Populated from `/v1/dev/status` enriched nodes.
+- **Status inference**: automatic `healthy` (recent events) / `stale` (30–60 min old) / `offline` (>60 min) based on configurable freshness window.
+
 ## 0.8.0 — Phase 2.5: real OTBR log ingestion
 
 - **OTBR log adapter** (`pipeline/otbr_adapter.py`): polls the Supervisor `/addons/{slug}/logs` endpoint, parses recognised lines into canonical Thread events, and persists them to SQLite with a resume cursor (hash of last-seen line + count) stored in `ingest_state`. Errors are non-fatal and surfaced in `/v1/ingest/state`.

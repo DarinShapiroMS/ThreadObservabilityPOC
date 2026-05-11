@@ -193,3 +193,30 @@ async def reinstall_addon(slug: str) -> dict[str, Any]:
         except Exception:
             return {"status": "ok", "action": "reinstall", "slug": slug}
 
+
+async def get_ha_device_registry() -> list[dict[str, Any]]:
+    """Attempt to fetch Home Assistant's device registry via REST API.
+
+    Requires ``homeassistant_api: true`` in config.yaml and valid HA token.
+    Falls back to empty list if HA is unreachable or returns no devices.
+    """
+    try:
+        # Try to reach HA's REST API directly (assumes HA is accessible on network).
+        # This is best-effort; if it fails, we fall back to local SQLite metadata.
+        ha_url = os.getenv("HOMEASSISTANT_URL", "http://homeassistant.local:8123")
+        ha_token = os.getenv("HOMEASSISTANT_TOKEN", "")
+        if not ha_token:
+            return []
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{ha_url}/api/config/device_registry/list",
+                headers={"Authorization": f"Bearer {ha_token}", "Accept": "application/json"},
+            )
+            if resp.status_code == 200:
+                devices = resp.json()
+                return devices if isinstance(devices, list) else []
+    except Exception:
+        pass
+    return []
+
+

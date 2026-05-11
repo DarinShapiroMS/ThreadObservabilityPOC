@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from . import supervisor_client
 from ..config import get_config
 from ..health import build_health_snapshot as _build_health_snapshot
+from ..pipeline import nodes as nodes_mod
 from ..pipeline import otbr_adapter
 from ..pipeline import reasoner as reasoner_mod
 from ..pipeline import topology as topology_mod
@@ -336,6 +337,43 @@ TOOL_DEFS: list[dict[str, Any]] = [
         ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
+    {
+        "name": "get_node_metadata",
+        "description": (
+            "Return enriched metadata for a Thread node: friendly name, role, area, "
+            "device_id, first/last seen times, current status (healthy/stale/offline), "
+            "and latest RSSI/LQI readings."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"eui64": {"type": "string", "description": "16-char hex node EUI64"}},
+            "required": ["eui64"],
+        },
+    },
+    {
+        "name": "set_node_friendly_name",
+        "description": (
+            "Set or update a node's friendly name (e.g., 'Living Room Coordinator'). "
+            "Returns the updated node record. Use this to make node identities human-readable."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "eui64": {"type": "string"},
+                "name": {"type": "string"},
+            },
+            "required": ["eui64", "name"],
+        },
+    },
+    {
+        "name": "list_all_nodes",
+        "description": (
+            "Return all Thread network nodes with enrichment: friendly names, role, "
+            "area, device_id, status (healthy/stale/offline), and first/last seen. "
+            "Ordered by most-recently-seen first."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 _TOOL_MAP = {t["name"]: t for t in TOOL_DEFS}
@@ -518,6 +556,36 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 
+    # ---- Node metadata tools (Phase 3) ----------------------------------
+    if name == "get_node_metadata":
+        try:
+            eui64 = str(arguments.get("eui64", "")).strip()
+            if not eui64:
+                return {"error": "eui64 required"}
+            return nodes_mod.get_node_summary(eui64, include_signal_strength=True)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "set_node_friendly_name":
+        try:
+            eui64 = str(arguments.get("eui64", "")).strip()
+            name = str(arguments.get("name", "")).strip()
+            if not eui64 or not name:
+                return {"error": "eui64 and name required"}
+            ok = get_store().set_node_friendly_name(eui64, name)
+            if not ok:
+                return {"error": f"node {eui64} not found"}
+            return nodes_mod.get_node_summary(eui64, include_signal_strength=True)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "list_all_nodes":
+        try:
+            return {
+                "nodes": nodes_mod.list_nodes_enriched(include_signal_strength=True),
+                "count": len(get_store().list_nodes()),
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc), "nodes": []}
+
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -532,7 +600,7 @@ def create_mcp_app() -> FastAPI:
 
     @app.get("/")
     def root() -> dict[str, str]:
-        return {"service": "mcp", "name": "thread-observability", "version": "0.8.0"}
+        return {"service": "mcp", "name": "thread-observability", "version": "0.9.0"}
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -575,7 +643,7 @@ def create_mcp_app() -> FastAPI:
             return ok({
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "thread-observability", "version": "0.8.0"},
+                "serverInfo": {"name": "thread-observability", "version": "0.9.0"},
             })
 
         if method == "notifications/initialized":
