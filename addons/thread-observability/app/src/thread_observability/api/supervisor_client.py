@@ -77,6 +77,24 @@ async def _post(path: str, json_body: dict[str, Any] | None = None) -> dict[str,
             return {"status": "ok"}
 
 
+async def _post_self_disruptive(path: str, action: str) -> dict[str, Any]:
+    """POST to a Supervisor endpoint that may stop/restart this add-on.
+
+    For operations like restart/rebuild, the current process can terminate
+    before the HTTP response fully arrives. Treat transport disconnects as
+    accepted rather than hard failures.
+    """
+    try:
+        return await _post(path)
+    except httpx.RequestError as exc:
+        return {
+            "status": "accepted",
+            "action": action,
+            "note": "request interrupted after dispatch; expected for self lifecycle action",
+            "error": exc.__class__.__name__,
+        }
+
+
 async def get_addon_info() -> dict[str, Any]:
     """Return Supervisor's view of this add-on (state, version, boot, etc.)."""
     info = await _get_json("/addons/self/info")
@@ -104,12 +122,12 @@ async def get_supervisor_logs(lines: int = 200) -> list[str]:
 
 async def restart_addon() -> dict[str, Any]:
     """Restart this add-on via Supervisor (fast; does not rebuild image)."""
-    return await _post("/addons/self/restart")
+    return await _post_self_disruptive("/addons/self/restart", action="restart")
 
 
 async def rebuild_addon() -> dict[str, Any]:
     """Rebuild this add-on from its repository source, then restart."""
-    return await _post("/addons/self/rebuild")
+    return await _post_self_disruptive("/addons/self/rebuild", action="rebuild")
 
 
 async def reload_store() -> dict[str, Any]:
@@ -153,11 +171,53 @@ async def update_addon() -> dict[str, Any]:
     full slug from ``/addons/self/info`` first so the caller doesn't need
     to know it.
     """
+    try:
+        await reload_store()
+    except Exception:  # noqa: BLE001
+        # Best-effort refresh only.
+        pass
+
     info = await _get_json("/addons/self/info")
     slug = info.get("slug")
     if not slug:
         raise RuntimeError("could not determine addon slug from /addons/self/info")
-    return await _post(f"/store/addons/{slug}/update")
+
+    current = info.get("version")
+    latest = info.get("version_latest")
+    if not info.get("update_available"):
+        return {
+            "status": "ok",
+            "action": "update",
+            "performed": False,
+            "reason": "no_update_available",
+            "current": current,
+            "latest": latest,
+        }
+
+    try:
+        return await _post(f"/store/addons/{slug}/update")
+    except httpx.RequestError as exc:
+        return {
+            "status": "accepted",
+            "action": "update",
+            "performed": True,
+            "note": "request interrupted after dispatch; expected for self update",
+            "error": exc.__class__.__name__,
+        }
+    except httpx.HTTPStatusError as exc:
+        # Supervisor can race from update_available=true -> false and return 403.
+        if exc.response is not None and exc.response.status_code == 403:
+            refreshed = await _get_json("/addons/self/info")
+            if not refreshed.get("update_available"):
+                return {
+                    "status": "ok",
+                    "action": "update",
+                    "performed": False,
+                    "reason": "no_update_available",
+                    "current": refreshed.get("version"),
+                    "latest": refreshed.get("version_latest"),
+                }
+        raise
 
 
 async def set_auto_update(enabled: bool) -> dict[str, Any]:

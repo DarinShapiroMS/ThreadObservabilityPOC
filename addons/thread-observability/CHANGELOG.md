@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.2 — dev-loop hardening for update/rebuild/restart
+
+- Hardened lifecycle MCP operations in `supervisor_client.py`:
+  - `ha_update_addon` now returns a clean no-op success when no update is available (`performed: false`, `reason: no_update_available`) instead of surfacing a raw 403.
+  - `ha_update_addon` handles transport disconnects during self-update as accepted dispatch (`status: accepted`) since the add-on may restart before the HTTP response completes.
+  - `ha_rebuild_addon` and `ha_restart_addon` now treat expected self-disruptive disconnects as accepted dispatch instead of hard failures.
+  - `ha_update_addon` keeps the canonical `/store/addons/{slug}/update` path, with preflight `reload_store()` and race-safe fallback for transient 403 when availability flips.
+- Added focused regression tests in `tests/test_supervisor_client.py` for:
+  - no-update path,
+  - 403-to-no-update race mapping,
+  - rebuild disconnect handling,
+  - update disconnect handling.
+
 ## 0.9.1 — dev-loop fix: JSON body for Supervisor POST endpoints
 
 - Fixed `_post()` in `supervisor_client.py` to send an empty JSON body `{}` by default. Supervisor's REST API (e.g., `/addons/self/rebuild`, `/store/addons/{slug}/update`) requires a JSON body even for simple POSTs; prior implementation was sending headers-only, causing 400/403 errors.

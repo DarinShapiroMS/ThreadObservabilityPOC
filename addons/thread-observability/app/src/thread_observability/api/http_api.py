@@ -27,7 +27,7 @@ from ..storage.sqlite_store import get_store
 
 log = logging.getLogger(__name__)
 
-ADDON_VERSION = "0.9.1"
+ADDON_VERSION = "0.9.2"
 LOG_PATH = Path("/data/thread-observability/addon.log")
 
 
