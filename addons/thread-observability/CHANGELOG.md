@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.14 — Stamp EUI64 + preserve registry metadata in merged map
+
+- `fetch_device_registry` now writes `extendedAddress` onto every value in the merged dict so `_extract_thread_devices` can key on it
+- `_extract_thread_devices` preserves `device_id`, `name`, `name_by_user`, etc. when it sees `extendedAddress`, instead of stripping them
+- This is the final link to actually surface friendly names in `list_all_nodes` and the UI
+
 ## 0.9.13 — Canonical Matter node_id (hex/decimal normalization)
 
 - HA registry stores Matter node_ids as 16-char zero-padded hex strings (e.g. `0000000000000001`); matter-server returns them as decimal integers (e.g. `1`). Reduce both sides to `str(int)` so they match as dict keys

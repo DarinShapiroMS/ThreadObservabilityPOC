@@ -488,18 +488,20 @@ async def fetch_device_registry() -> list[dict[str, Any]]:
     
     # Merge: OTBR nodes are the primary source, supplemented with registry data
     merged: dict[str, dict[str, Any]] = {}
-    
+
     # Add OTBR nodes with any matching registry data
     for eui, otbr_data in otbr_nodes.items():
-        merged[eui] = {**otbr_data}
+        merged[eui] = {**otbr_data, "extendedAddress": eui}
         if eui in registry_by_eui:
             merged[eui].update(registry_by_eui[eui])
-    
-    # Add registry-only devices (not discovered from OTBR)
+
+    # Add registry-only devices (not discovered from OTBR). Stamp the EUI64
+    # onto each value as ``extendedAddress`` so ``_extract_thread_devices``
+    # can key on it.
     for eui, reg_data in registry_by_eui.items():
         if eui not in merged:
-            merged[eui] = reg_data
-    
+            merged[eui] = {**reg_data, "extendedAddress": eui}
+
     # Convert to list format for downstream processing
     return list(merged.values())
 
@@ -557,13 +559,23 @@ def _extract_thread_devices(devices: list[dict[str, Any]]) -> dict[str, dict[str
             if ext_addr:
                 try:
                     eui = _normalize_ieee(str(ext_addr))
+                    # Preserve registry metadata if it's already stamped on the
+                    # dict (matter-bridged devices and merged OTBR+registry).
                     out[eui] = {
                         "role": dev.get("role"),
                         "rloc": dev.get("rloc"),
+                        "device_id": dev.get("device_id"),
+                        "name": dev.get("name"),
+                        "name_by_user": dev.get("name_by_user"),
+                        "manufacturer": dev.get("manufacturer"),
+                        "model": dev.get("model"),
+                        "area_id": dev.get("area_id"),
+                        "primary_config_entry": dev.get("primary_config_entry"),
                     }
                     log.debug(
-                        "Found Thread node from OTBR: eui=%s role=%s",
+                        "Found Thread node: eui=%s name=%s role=%s",
                         eui,
+                        dev.get("name_by_user") or dev.get("name"),
                         dev.get("role"),
                     )
                 except Exception as exc:
