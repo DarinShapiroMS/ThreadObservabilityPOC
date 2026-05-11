@@ -150,7 +150,7 @@ async def _load_matter_node_bridge_async() -> dict[str, str]:
     try:
         import websockets  # type: ignore[import-not-found]
     except ImportError:
-        log.debug("websockets package not installed; skipping Matter bridge")
+        log.info("Matter bridge: websockets package not installed")
         return {}
 
     bridge: dict[str, str] = {}
@@ -159,24 +159,60 @@ async def _load_matter_node_bridge_async() -> dict[str, str]:
             async with websockets.connect(MATTER_WS_URL) as ws:
                 # Server sends a ServerInfoMessage on connect; drain it.
                 try:
-                    await asyncio.wait_for(ws.recv(), timeout=2.0)
+                    info_raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                    log.info(
+                        "Matter bridge: connected to %s, server_info=%s",
+                        MATTER_WS_URL, str(info_raw)[:200],
+                    )
                 except asyncio.TimeoutError:
-                    pass
+                    log.info("Matter bridge: connected to %s (no server_info)", MATTER_WS_URL)
                 req = json.dumps({
                     "message_id": "thread-obs-get-nodes",
                     "command": "get_nodes",
                 })
                 await ws.send(req)
-                raw = await ws.recv()
-                payload = json.loads(raw)
+                # Loop until we get the response with our message_id (skip events).
+                payload = None
+                for _ in range(10):
+                    raw = await ws.recv()
+                    candidate = json.loads(raw)
+                    if (
+                        isinstance(candidate, dict)
+                        and candidate.get("message_id") == "thread-obs-get-nodes"
+                    ):
+                        payload = candidate
+                        break
+                if payload is None:
+                    log.info("Matter bridge: no matching response for get_nodes")
+                    return {}
     except Exception as exc:  # noqa: BLE001
-        log.debug("Matter WS bridge unavailable (%s): %s", MATTER_WS_URL, exc)
+        log.info("Matter bridge: WS unavailable (%s): %s", MATTER_WS_URL, exc)
+        return {}
+
+    if "error_code" in payload:
+        log.info("Matter bridge: get_nodes returned error: %s", payload.get("error_code"))
         return {}
 
     nodes = payload.get("result") if isinstance(payload, dict) else None
     if not isinstance(nodes, list):
-        log.debug("Matter WS get_nodes returned unexpected shape: %r", type(payload))
+        log.info(
+            "Matter bridge: get_nodes returned unexpected shape: keys=%s",
+            list(payload.keys()) if isinstance(payload, dict) else type(payload).__name__,
+        )
         return {}
+
+    log.info("Matter bridge: get_nodes returned %d nodes", len(nodes))
+    # Log a sample node's structure so we can see the actual schema.
+    if nodes:
+        sample = nodes[0] if isinstance(nodes[0], dict) else {}
+        sample_attrs = sample.get("attributes") or {}
+        attr_keys = list(sample_attrs.keys())[:20] if isinstance(sample_attrs, dict) else []
+        log.info(
+            "Matter bridge: sample node_id=%s top_keys=%s attr_key_sample=%s",
+            sample.get("node_id"),
+            list(sample.keys())[:15],
+            attr_keys,
+        )
 
     for node in nodes:
         if not isinstance(node, dict):
@@ -202,16 +238,10 @@ async def _load_matter_node_bridge_async() -> dict[str, str]:
                 bridge[str(node_id)] = eui
                 break
 
-    if bridge:
-        log.debug(
-            "Loaded Matter bridge from %s (%d entries)",
-            MATTER_WS_URL, len(bridge),
-        )
-    else:
-        log.debug(
-            "Matter WS bridge returned 0 entries from %d nodes",
-            len(nodes),
-        )
+    log.info(
+        "Matter bridge: extracted %d EUI64 mappings from %d nodes (key=%s)",
+        len(bridge), len(nodes), _MATTER_GENERAL_DIAG_NETIF_KEY,
+    )
     return bridge
 
 

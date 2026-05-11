@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.9 — Matter WS bridge diagnostics
+
+- Log Matter WS connect status, server_info banner, node count, and sample node schema at INFO level
+- Loop until response with matching `message_id` to skip subscription events
+- Surface error_code responses instead of silently returning empty
+
 ## 0.9.8 — Discovery diagnostics at INFO level
 
 - Add INFO-level log lines at OTBR fetch, registry parse, Matter WS bridge, and merge stages so default `log_level: info` reveals which path is empty when `discover_thread_devices` returns matched=0
