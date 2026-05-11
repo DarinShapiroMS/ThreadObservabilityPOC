@@ -61,26 +61,53 @@ def _normalize_ieee(ieee_str: str) -> str:
     return ieee_str.lower().zfill(16)[-16:]
 
 
+def _canonical_matter_node_id(raw: Any) -> str | None:
+    """Normalize a Matter node id to a canonical decimal string.
+
+    HA's device registry stores Matter node ids as 16-char zero-padded
+    hex strings (e.g. ``"0000000000000001"``). python-matter-server returns
+    them as decimal integers (e.g. ``1``). Reduce both to ``str(int)`` so
+    they compare equal as dict keys.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return str(raw)
+    s = str(raw).strip()
+    if not s:
+        return None
+    if s.lower().startswith("0x"):
+        s = s[2:]
+    # Try hex first (HA's registry format). If that fails, try decimal.
+    try:
+        return str(int(s, 16))
+    except ValueError:
+        pass
+    try:
+        return str(int(s, 10))
+    except ValueError:
+        return None
+
+
 def _extract_matter_node_id(value: str) -> str | None:
     """Extract a Matter node id from a device-registry identifier value.
 
-    HA Matter devices typically expose identifiers like:
+    HA Matter devices expose identifiers like:
+      ["matter", "<node_id_hex16>"]   (most common — 16-char zero-padded hex)
       ["matter", "<fabric_id>-<node_id>"]
       ["matter", "<fabric_id>-<node_id>-<endpoint_id>"]
-      ["matter", "<node_id>"]
-    We treat the node_id as the segment after the first '-'. If only one
-    segment is present, we use it directly. Result is returned as a string
-    so it can be used as a dict key consistently.
+    Returns a canonical decimal-string node_id, or None.
     """
     if not value:
         return None
     parts = value.split("-")
-    if len(parts) >= 2:
-        candidate = parts[1]
-    else:
-        candidate = parts[0]
-    candidate = candidate.strip()
-    return candidate or None
+    # Single segment: usually the hex node id directly.
+    if len(parts) == 1:
+        return _canonical_matter_node_id(parts[0])
+    # Multi-segment: the node id is after the first hyphen.
+    return _canonical_matter_node_id(parts[1])
 
 
 def _load_matter_node_bridge() -> dict[str, str]:
@@ -284,7 +311,9 @@ async def _load_matter_node_bridge_async() -> dict[str, str]:
                     break
 
         if eui:
-            bridge[str(node_id)] = eui
+            canon = _canonical_matter_node_id(node_id)
+            if canon:
+                bridge[canon] = eui
 
     log.info(
         "Matter bridge: extracted %d EUI64 mappings from %d nodes",

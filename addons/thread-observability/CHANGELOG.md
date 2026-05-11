@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.13 — Canonical Matter node_id (hex/decimal normalization)
+
+- HA registry stores Matter node_ids as 16-char zero-padded hex strings (e.g. `0000000000000001`); matter-server returns them as decimal integers (e.g. `1`). Reduce both sides to `str(int)` so they match as dict keys
+- Expect: 16 EUI64 mappings now actually merge into the discovery map
+
 ## 0.9.12 — Diagnose node_id key mismatch between registry and matter-server
 
 - 0.9.11 successfully extracted 16/17 EUI64s from matter-server but merged 0 into the discovery map
