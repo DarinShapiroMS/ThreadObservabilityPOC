@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.1 — dev-loop fix: JSON body for Supervisor POST endpoints
+
+- Fixed `_post()` in `supervisor_client.py` to send an empty JSON body `{}` by default. Supervisor's REST API (e.g., `/addons/self/rebuild`, `/store/addons/{slug}/update`) requires a JSON body even for simple POSTs; prior implementation was sending headers-only, causing 400/403 errors.
+- This unblocks `ha_update_addon`, `ha_rebuild_addon`, and `ha_restart_addon` MCP tools, enabling fully automated dev loop via MCP without manual HA UI clicks.
+
 ## 0.9.0 — Phase 3: Node-friendly names and device discovery
 
 - **Node metadata enrichment** (`pipeline/nodes.py`): compute node status (healthy/stale/offline) based on event recency, extract latest RSSI/LQI signal strength, display human-readable names alongside EUI64 hex.

@@ -600,7 +600,7 @@ def create_mcp_app() -> FastAPI:
 
     @app.get("/")
     def root() -> dict[str, str]:
-        return {"service": "mcp", "name": "thread-observability", "version": "0.9.0"}
+        return {"service": "mcp", "name": "thread-observability", "version": "0.9.1"}
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -643,7 +643,7 @@ def create_mcp_app() -> FastAPI:
             return ok({
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "thread-observability", "version": "0.9.0"},
+                "serverInfo": {"name": "thread-observability", "version": "0.9.1"},
             })
 
         if method == "notifications/initialized":

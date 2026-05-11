@@ -61,9 +61,15 @@ async def _get_text(path: str) -> str:
         return resp.text
 
 
-async def _post(path: str) -> dict[str, Any]:
+async def _post(path: str, json_body: dict[str, Any] | None = None) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(f"{SUPERVISOR_URL}{path}", headers=_headers())
+        # Send an empty JSON body by default if none provided; Supervisor expects this.
+        body = json_body if json_body is not None else {}
+        resp = await client.post(
+            f"{SUPERVISOR_URL}{path}",
+            headers=_headers(),
+            json=body,
+        )
         resp.raise_for_status()
         try:
             return resp.json()
