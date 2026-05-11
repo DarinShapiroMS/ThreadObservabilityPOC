@@ -261,6 +261,10 @@ async def fetch_device_registry() -> list[dict[str, Any]]:
                         endpoint,
                         headers={"Accept": "application/json"},
                     )
+                    log.info(
+                        "discover: OTBR endpoint %s -> HTTP %s",
+                        endpoint, resp.status_code,
+                    )
                     if resp.status_code == 200:
                         data = resp.json()
                         log.debug(
@@ -287,10 +291,11 @@ async def fetch_device_registry() -> list[dict[str, Any]]:
                                 log.debug("Discovered %d Thread nodes from OTBR topology", len(otbr_nodes))
                                 break
                 except Exception as exc:
-                    log.debug("OTBR endpoint %s failed: %s", endpoint, exc)
+                    log.info("discover: OTBR endpoint %s failed: %s", endpoint, exc)
                     continue
     except Exception as exc:
         log.warning("Failed to fetch OTBR topology: %s", exc)
+    log.info("discover: otbr_nodes=%d", len(otbr_nodes))
     
     # Now fetch device registry to get friendly names and metadata.
     # Thread-only: we no longer match zigbee connections.
@@ -339,7 +344,12 @@ async def fetch_device_registry() -> list[dict[str, Any]]:
                 )
     if registry_by_matter_node:
         # Bridge Matter node_id -> EUI64 via matter-server WebSocket API.
+        log.info(
+            "discover: %d Matter-only registry devices; querying matter-server WS",
+            len(registry_by_matter_node),
+        )
         bridge = await _load_matter_node_bridge_async()
+        log.info("discover: matter bridge returned %d entries", len(bridge))
         for node_id, meta in registry_by_matter_node.items():
             eui = bridge.get(node_id)
             if eui:
@@ -355,7 +365,15 @@ async def fetch_device_registry() -> list[dict[str, Any]]:
                 )
     
     if registry_by_eui:
-        log.debug("Loaded device registry with %d Thread devices", len(registry_by_eui))
+        log.info(
+            "discover: registry contributed %d EUI64-keyed devices (thread+matter-bridged)",
+            len(registry_by_eui),
+        )
+    else:
+        log.info(
+            "discover: registry contributed 0 devices (registry_devices=%d, matter_only=%d)",
+            len(reg_devices), len(registry_by_matter_node),
+        )
     
     # Merge: OTBR nodes are the primary source, supplemented with registry data
     merged: dict[str, dict[str, Any]] = {}

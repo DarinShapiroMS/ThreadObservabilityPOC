@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.8 — Discovery diagnostics at INFO level
+
+- Add INFO-level log lines at OTBR fetch, registry parse, Matter WS bridge, and merge stages so default `log_level: info` reveals which path is empty when `discover_thread_devices` returns matched=0
+
 ## 0.9.7 — Thread-only matching + Matter node_id WS bridge
 
 - Restrict device registry matching to Thread connection types (`thread`, `ieee802154`); no longer match zigbee
