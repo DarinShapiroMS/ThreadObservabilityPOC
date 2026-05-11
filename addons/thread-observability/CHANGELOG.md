@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.6 — OTBR-based device discovery with HA device registry merge
+
+- Rewrote device discovery to query OTBR `/api/topology` endpoint as authoritative source for Thread nodes
+- Merge OTBR topology (node role, rloc) with HA device registry (friendly names, device IDs, metadata)
+- Fallback to reading `.storage/core.device_registry` JSON file if OTBR API unavailable
+- Solves root issue: Thread device data not exposed via HA REST API; sourced from OTBR addon directly
+- Enables automatic node labeling with friendly names for better troubleshooting
+
 ## 0.9.3 — update path compatibility fallback
 
 - `ha_update_addon` now attempts both Supervisor update endpoints in order:
