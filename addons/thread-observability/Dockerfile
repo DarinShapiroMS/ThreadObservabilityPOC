@@ -16,7 +16,7 @@ COPY app/ /opt/thread-observability/app/
 COPY rootfs/ /
 
 RUN mkdir -p /data/thread-observability && \
-    rm -rf /etc/cont-init.d /etc/services.d && \
+    rm -rf /etc/cont-init.d && \
     sed -i 's/\r$//' /etc/s6-overlay/s6-rc.d/core/run \
                      /etc/s6-overlay/s6-rc.d/mcp/run && \
     chmod 755 /etc/s6-overlay/s6-rc.d/core/run \

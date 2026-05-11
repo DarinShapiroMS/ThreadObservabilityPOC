@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8
+
+- Keep empty /etc/services.d directory (only delete cont-init.d) so HA legacy-services shim finds it, scans, finds nothing, and exits cleanly
+- Prevents suexec fatal crash that cascades into service restarts
+- Allows s6-rc.d native services to run uninterrupted after legacy shim completes
+
 ## 0.1.7
 
 - Added explicit `rm -rf /etc/cont-init.d /etc/services.d` in Dockerfile to eliminate Docker layer cache issues
