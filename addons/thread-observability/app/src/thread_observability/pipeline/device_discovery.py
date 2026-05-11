@@ -41,19 +41,22 @@ def _normalize_ieee(ieee_str: str) -> str:
 
 
 async def fetch_device_registry() -> list[dict[str, Any]]:
-    """Fetch Thread device/node info from OTBR REST API.
+    """Fetch Thread device/node info from OTBR REST API + HA device registry.
     
     The OTBR addon exposes a /api/topology endpoint that returns information
     about all Thread nodes in the network, including their extended addresses (EUI64).
-    This is more reliable than trying to access HA's device registry via API,
-    since Thread node topology comes directly from the OTBR border router itself.
+    The HA device registry provides friendly names and device IDs for those nodes.
     
-    Returns a list of dicts with 'extendedAddress' (EUI64) and other node info.
+    This function fetches both sources and merges them:
+    - OTBR topology: authoritative node list with role and rloc info
+    - HA device registry: friendly names and device metadata
+    
+    Returns a merged list of dicts combining both sources.
     """
     import httpx
     
-    # OTBR API URL - typically accessible via http://otbr:8080/api
-    # or http://supervisor:9203/addon/core_openthread_border_router/api (via supervisor)
+    # Try OTBR API first for node topology
+    otbr_nodes: dict[str, dict[str, Any]] = {}
     otbr_endpoints = [
         "http://supervisor:9203/addon/core_openthread_border_router/api/topology",  # Via Supervisor
         "http://otbr:8080/api/topology",  # Direct if accessible
@@ -73,28 +76,72 @@ async def fetch_device_registry() -> list[dict[str, Any]]:
                             "Thread topology fetched from %s",
                             endpoint,
                         )
-                        # Convert OTBR topology response to thread device list
+                        # Convert OTBR topology response to dict keyed by EUI64
                         if isinstance(data, dict):
                             topology = data.get("topology", {})
                             nodes = topology.get("nodes", [])
-                            return [
-                                {
-                                    "extendedAddress": node.get("extendedAddress"),
-                                    "rloc": node.get("rloc"),
-                                    "role": node.get("role"),
-                                }
-                                for node in nodes
-                                if node.get("extendedAddress")
-                            ]
+                            for node in nodes:
+                                ext_addr = node.get("extendedAddress")
+                                if ext_addr:
+                                    try:
+                                        eui = _normalize_ieee(str(ext_addr))
+                                        otbr_nodes[eui] = {
+                                            "extendedAddress": ext_addr,
+                                            "rloc": node.get("rloc"),
+                                            "role": node.get("role"),
+                                        }
+                                    except Exception as exc:
+                                        log.debug("Failed to parse OTBR node %s: %s", ext_addr, exc)
+                            if otbr_nodes:
+                                log.debug("Discovered %d Thread nodes from OTBR topology", len(otbr_nodes))
+                                break
                 except Exception as exc:
                     log.debug("OTBR endpoint %s failed: %s", endpoint, exc)
                     continue
-        
-        log.warning("All OTBR endpoints failed; attempting device registry fallback")
-        return _fallback_device_registry()
     except Exception as exc:
-        log.warning("Failed to fetch Thread topology: %s", exc)
-        return _fallback_device_registry()
+        log.warning("Failed to fetch OTBR topology: %s", exc)
+    
+    # Now fetch device registry to get friendly names and metadata
+    reg_devices = _fallback_device_registry()
+    registry_by_eui: dict[str, dict[str, Any]] = {}
+    for dev in reg_devices:
+        connections = dev.get("connections", [])
+        for conn_type, conn_id in connections:
+            if conn_type in ("thread", "zigbee", "ieee802154"):
+                try:
+                    eui = _normalize_ieee(str(conn_id))
+                    registry_by_eui[eui] = {
+                        "device_id": dev.get("id"),
+                        "name": dev.get("name"),
+                        "name_by_user": dev.get("name_by_user"),
+                        "manufacturer": dev.get("manufacturer"),
+                        "model": dev.get("model"),
+                        "area_id": dev.get("area_id"),
+                        "primary_config_entry": dev.get("primary_config_entry"),
+                    }
+                    break  # Use first Thread connection found
+                except Exception as exc:
+                    log.debug("Failed to parse connection %s: %s", conn_id, exc)
+    
+    if registry_by_eui:
+        log.debug("Loaded device registry with %d Thread devices", len(registry_by_eui))
+    
+    # Merge: OTBR nodes are the primary source, supplemented with registry data
+    merged: dict[str, dict[str, Any]] = {}
+    
+    # Add OTBR nodes with any matching registry data
+    for eui, otbr_data in otbr_nodes.items():
+        merged[eui] = {**otbr_data}
+        if eui in registry_by_eui:
+            merged[eui].update(registry_by_eui[eui])
+    
+    # Add registry-only devices (not discovered from OTBR)
+    for eui, reg_data in registry_by_eui.items():
+        if eui not in merged:
+            merged[eui] = reg_data
+    
+    # Convert to list format for downstream processing
+    return list(merged.values())
 
 
 def _fallback_device_registry() -> list[dict[str, Any]]:
