@@ -27,10 +27,30 @@ _EUI = r"[0-9a-fA-F]{16}"
 _TS_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+\-]\d{2}:?\d{2})?)\s+"),
     re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})[,.](?P<ms>\d{3})\s+"),
+    # Time-only format from OTBR daemon logs: HH:MM:SS.mmm (e.g., "16:39:34.573")
+    re.compile(r"^(?P<ts>\d{2}:\d{2}:\d{2})\.(?P<ms>\d{3})\s+"),
 )
 
 # Event signatures. Each yields a partial canonical event; the caller fills ts.
 _EVENT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # === Real MeshForwarder patterns from OTBR daemon logs ===
+    # "Failed to send IPv6 UDP msg ... to:0x9c00 ... error:ChannelAccessFailure ..."
+    (re.compile(r"Failed\s+to\s+send\s+IPv6\s+UDP\s+msg.*?to:(?P<to_id>0x[0-9a-f]+|[0-9a-f]{16}).*?error:(?P<error>\w+)", re.I),
+     "link_failure"),
+    # "Dropping (reassembly queue) ... error:ReassemblyTimeout ..."
+    (re.compile(r"Dropping\s+\(reassembly\s+queue\).*?error:(?P<error>\w+)", re.I),
+     "reassembly_timeout"),
+    # "Handle transmit done failed: ChannelAccessFailure"
+    (re.compile(r"Handle\s+transmit\s+done\s+failed.*?:\s*(?P<error>\w+)", re.I),
+     "transmit_failure"),
+    # "Failed to process Link Accept: Security"
+    (re.compile(r"Failed\s+to\s+process\s+Link\s+Accept.*?:\s*(?P<error>\w+)", re.I),
+     "link_accept_failed"),
+    # IPv6 address lines: extract EUI64 from fd29:382:eded:1:XXXX:XXXX:XXXX:XXXX
+    (re.compile(r"(?:src|dst):\[fd[0-9a-f:]+?:(?P<eui64_ipv6>[0-9a-f]{4}:[0-9a-f]{4}:[0-9a-f]{4}:[0-9a-f]{4})\]", re.I),
+     "node_seen"),
+    
+    # === Legacy OpenThread patterns (for compatibility) ===
     # "Role detached -> child" / "Role child -> router"
     (re.compile(r"Role\s+\w+\s*->\s*(?P<role>detached|child|router|leader|disabled)", re.I),
      "role_change"),
@@ -57,9 +77,10 @@ _EVENT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 # RSSI / LQI extractors (applied independently after main match)
-_RSSI_RE = re.compile(r"rss(?:i)?[:= ]\s*(?P<rssi>-?\d+)", re.I)
+_RSSI_RE = re.compile(r"rss(?:i)?[:= ]\s*(?P<rssi>-?\d+(?:\.\d+)?)", re.I)  # Supports decimal: -75.5
 _LQI_RE = re.compile(r"lqi[:= ]\s*(?P<lqi>\d+)", re.I)
 _PARENT_RE = re.compile(rf"parent[:= ]\s*(?P<parent>{_EUI})", re.I)
+_IPV6_EUI64_RE = re.compile(r"fd[0-9a-f:]+?:(?P<eui64_ipv6>[0-9a-f]{4}:[0-9a-f]{4}:[0-9a-f]{4}:[0-9a-f]{4})", re.I)
 
 
 @dataclass(frozen=True)
@@ -97,15 +118,22 @@ def _extract_ts(line: str) -> tuple[str, str]:
             continue
         raw = m.group("ts")
         try:
-            # Normalise "YYYY-MM-DD HH:MM:SS" → "YYYY-MM-DDTHH:MM:SS"
-            normalised = raw.replace(" ", "T") if "T" not in raw and " " in raw else raw
-            # Append milliseconds if separately captured
-            try:
-                ms = m.group("ms")
-                if ms:
-                    normalised = f"{normalised}.{ms}"
-            except IndexError:
-                pass
+            # Handle time-only format (HH:MM:SS from OTBR daemon logs)
+            if len(raw) <= 8:  # Just HH:MM:SS
+                today = datetime.now(tz=UTC).date()
+                ms = m.group("ms") if "ms" in m.groupdict() else None
+                ms_str = f".{ms}" if ms else ""
+                normalised = f"{today}T{raw}{ms_str}"
+            else:
+                # Normalise "YYYY-MM-DD HH:MM:SS" → "YYYY-MM-DDTHH:MM:SS"
+                normalised = raw.replace(" ", "T") if "T" not in raw and " " in raw else raw
+                # Append milliseconds if separately captured
+                try:
+                    ms = m.group("ms")
+                    if ms:
+                        normalised = f"{normalised}.{ms}"
+                except IndexError:
+                    pass
             if normalised.endswith("Z"):
                 normalised = normalised[:-1] + "+00:00"
             dt = datetime.fromisoformat(normalised)
@@ -128,21 +156,49 @@ def parse_line(line: str) -> ParsedEvent | None:
             continue
         gd = m.groupdict()
         eui = gd.get("eui64")
+        
+        # Try IPv6 EUI64 extraction (format: fd29:382:eded:1:XXXX:XXXX:XXXX:XXXX)
+        if not eui:
+            ipv6_match = _IPV6_EUI64_RE.search(body)
+            if ipv6_match:
+                ipv6_eui_part = ipv6_match.group("eui64_ipv6")
+                # Convert "c6b7:7f58:e5ac:eed4" to "c6b77f58e5aceed4"
+                eui = ipv6_eui_part.replace(":", "").lower()
+        
         # For role_change / attach_* there may be no eui64 in the line; try
         # the fallback "ext_addr=" anywhere else in the body.
         if not eui:
             extra = re.search(rf"ext_addr=({_EUI})", body, re.I)
             if extra:
                 eui = extra.group(1)
+        
+        # Try extracting from "to:" field (short address or EUI64)
+        if not eui and "to_id" in gd:
+            to_id = gd.get("to_id", "").lower()
+            # If it's a short address like "0x9c00", normalize to 16-char format
+            if to_id.startswith("0x"):
+                to_id = to_id[2:].zfill(16)
+            if len(to_id) <= 16:
+                eui = to_id.zfill(16)
+        
         rssi_m = _RSSI_RE.search(body)
         lqi_m = _LQI_RE.search(body)
         par_m = _PARENT_RE.search(body)
+        
+        # Parse RSSI, handling both integer and decimal values
+        rssi = None
+        if rssi_m:
+            try:
+                rssi = int(float(rssi_m.group("rssi")))  # Convert "-75.5" → -75
+            except ValueError:
+                rssi = None
+        
         return ParsedEvent(
             ts=ts,
             eui64=(eui.lower() if eui else None),
             type=etype,
             parent_eui64=(par_m.group("parent").lower() if par_m else None),
-            rssi=int(rssi_m.group("rssi")) if rssi_m else None,
+            rssi=rssi,
             lqi=int(lqi_m.group("lqi")) if lqi_m else None,
             raw=line.rstrip("\n"),
         )
