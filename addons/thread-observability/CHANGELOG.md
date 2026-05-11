@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0 — Phase 2.5: real OTBR log ingestion
+
+- **OTBR log adapter** (`pipeline/otbr_adapter.py`): polls the Supervisor `/addons/{slug}/logs` endpoint, parses recognised lines into canonical Thread events, and persists them to SQLite with a resume cursor (hash of last-seen line + count) stored in `ingest_state`. Errors are non-fatal and surfaced in `/v1/ingest/state`.
+- **OTBR/openthread line parser** (`pipeline/otbr_parser.py`): tolerant regex parser for `attach` / `attach_failed` / `attach_attempt` / `detach` / `parent_response` / `role_change` / `child_added` / `child_removed` / `node_seen`, plus RSSI/LQI/parent extraction.
+- **Auto-discovery**: `list_otbr_candidates` enumerates Supervisor add-ons matching `openthread|otbr|silabs-multiprotocol`; `set_otbr_slug` persists the operator choice and resets the cursor.
+- **Background scheduler**: FastAPI lifespan now starts an asyncio task that calls `ingest_once` every `scheduler.ingestion_interval_seconds` (default 10s).
+- **New REST endpoints** on the core service: `GET /v1/ingest/state`, `GET /v1/ingest/candidates`, `POST /v1/ingest/run`, `POST /v1/ingest/slug`.
+- **New MCP tools** (25 total now): `list_otbr_candidates`, `set_otbr_slug`, `ingest_now`, `get_ingest_state`.
+- **Dashboard**: new “OTBR Ingestion” card showing slug, lines processed, events total, last event/run timestamps, last error; plus an “Ingest now” / “List OTBR add-ons” pair of buttons.
+
 ## 0.7.1 — dev-loop: enable admin role
 
 - Bumped `hassio_role` from `manager` to `admin` so `ha_update_addon` can call `POST /store/addons/{slug}/update` (Supervisor returns 403 for `manager`). This unblocks fully-automated MCP deploys.

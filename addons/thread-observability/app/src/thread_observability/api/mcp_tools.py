@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from . import supervisor_client
 from ..config import get_config
 from ..health import build_health_snapshot as _build_health_snapshot
+from ..pipeline import otbr_adapter
 from ..pipeline import reasoner as reasoner_mod
 from ..pipeline import topology as topology_mod
 from ..pipeline import seed as seed_mod
@@ -294,6 +295,47 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "description": "Probe the time-series backend (Influx if configured, else SQLite fallback) and return status.",
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
+    {
+        "name": "list_otbr_candidates",
+        "description": (
+            "Return Supervisor add-ons that look like OpenThread Border Router hosts "
+            "(slug or name contains 'openthread', 'otbr', or 'silabs-multiprotocol'). "
+            "Use to discover the slug to feed into set_otbr_slug."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "set_otbr_slug",
+        "description": (
+            "Set the OTBR add-on slug used by the background ingestion loop. Resets the "
+            "cursor so the next poll will re-scan all currently-available log lines."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"slug": {"type": "string"}},
+            "required": ["slug"],
+        },
+    },
+    {
+        "name": "ingest_now",
+        "description": (
+            "Run one OTBR ingestion pass synchronously: fetch logs from Supervisor, "
+            "parse new lines, insert canonical events. Returns line/event counts."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"slug": {"type": "string", "description": "Optional slug override."}},
+            "required": [],
+        },
+    },
+    {
+        "name": "get_ingest_state",
+        "description": (
+            "Return the current OTBR ingestion state: configured slug, lines processed, "
+            "events inserted, last event timestamp, last run timestamp, last error."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 _TOOL_MAP = {t["name"]: t for t in TOOL_DEFS}
@@ -449,6 +491,33 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 
+    # ---- OTBR ingestion tools (Phase 2.5) ---------------------------------
+    if name == "list_otbr_candidates":
+        try:
+            cands = await otbr_adapter.list_candidates()
+            return {"count": len(cands), "candidates": cands}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc), "candidates": []}
+    if name == "set_otbr_slug":
+        try:
+            slug = str(arguments.get("slug", "")).strip()
+            if not slug:
+                return {"error": "slug required"}
+            return otbr_adapter.set_slug(slug)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "ingest_now":
+        try:
+            slug = arguments.get("slug")
+            return await otbr_adapter.ingest_once(slug=slug)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "get_ingest_state":
+        try:
+            return otbr_adapter.get_state()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -463,7 +532,7 @@ def create_mcp_app() -> FastAPI:
 
     @app.get("/")
     def root() -> dict[str, str]:
-        return {"service": "mcp", "name": "thread-observability", "version": "0.7.1"}
+        return {"service": "mcp", "name": "thread-observability", "version": "0.8.0"}
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -506,7 +575,7 @@ def create_mcp_app() -> FastAPI:
             return ok({
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "thread-observability", "version": "0.7.1"},
+                "serverInfo": {"name": "thread-observability", "version": "0.8.0"},
             })
 
         if method == "notifications/initialized":

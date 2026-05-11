@@ -4,8 +4,9 @@ Serves a lightweight status dashboard at ``/`` (Ingress entry-point) plus
 JSON endpoints under ``/v1/...`` for programmatic access.
 """
 
-from __future__ import annotations
-
+import asyncio
+import contextlib
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -16,13 +17,16 @@ from fastapi.responses import HTMLResponse
 from . import supervisor_client
 from ..config import get_config
 from ..health import build_health_snapshot
+from ..pipeline import otbr_adapter
 from ..pipeline import reasoner as reasoner_mod
 from ..pipeline import seed as seed_mod
 from ..pipeline import topology as topology_mod
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
 
-ADDON_VERSION = "0.7.1"
+log = logging.getLogger(__name__)
+
+ADDON_VERSION = "0.8.0"
 LOG_PATH = Path("/data/thread-observability/addon.log")
 
 
@@ -122,11 +126,22 @@ DASHBOARD_HTML = """<!doctype html>
       <dl class="kv" id="store-kv"></dl>
     </div>
 
+    <div class="card">
+      <div class="row"><h2>OTBR Ingestion</h2><span id="ing-pill" class="pill warn">loading</span></div>
+      <dl class="kv" id="ing-kv"></dl>
+      <div class="links" style="margin-top:.5rem">
+        <button onclick="doPost('v1/ingest/run')">Ingest now</button>
+        <button onclick="listCandidates()">List OTBR add-ons</button>
+      </div>
+      <pre id="ing-out" class="muted" style="margin-top:.5rem;max-height:140px">(no action yet)</pre>
+    </div>
+
     <div class="card wide">
       <h2>Dev Actions</h2>
       <div class="links">
         <button onclick="doPost('v1/dev/seed')">Seed demo topology</button>
         <button onclick="doPost('v1/reasoner/run')">Run reasoner</button>
+        <button onclick="doPost('v1/ingest/run')">Run OTBR ingest</button>
         <button onclick="refresh()">Refresh now</button>
       </div>
       <pre id="action-out" class="muted" style="margin-top:.5rem;max-height:120px">(no action run yet)</pre>
@@ -278,9 +293,37 @@ async function refresh() {
         newest_event: st.events_newest || '—',
       });
     }
+
+    const ing = s.ingestion || {};
+    const ingPill = document.getElementById('ing-pill');
+    if (ing.error) {
+      setPill(ingPill, 'err', 'error');
+    } else if (!ing.slug) {
+      setPill(ingPill, 'warn', 'no slug');
+    } else if (ing.last_error) {
+      setPill(ingPill, 'warn', 'errors');
+    } else {
+      setPill(ingPill, 'ok', 'active');
+    }
+    fmtKV(document.getElementById('ing-kv'), {
+      slug: ing.slug || '(autodiscover)',
+      lines_processed: ing.position,
+      events_total: ing.events_total,
+      last_event_ts: ing.last_event_ts || '—',
+      last_run_at: ing.last_run_at || '—',
+      last_error: ing.last_error || '—',
+    });
   } catch (e) {
     document.getElementById('logs').textContent = 'Error: ' + e.message;
   }
+}
+async function listCandidates() {
+  const out = document.getElementById('ing-out');
+  out.textContent = 'GET v1/ingest/candidates …';
+  try {
+    const j = await fetchJSON('v1/ingest/candidates');
+    out.textContent = JSON.stringify(j, null, 2);
+  } catch (e) { out.textContent = 'Error: ' + e.message; }
 }
 refresh();
 setInterval(refresh, 5000);
@@ -290,9 +333,30 @@ setInterval(refresh, 5000);
 """
 
 
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Start/stop background scheduler tasks alongside the FastAPI app."""
+    cfg = get_config()
+    interval = int(getattr(cfg.scheduler, "ingestion_interval_seconds", 10))
+    task = asyncio.create_task(otbr_adapter.run_forever(interval_seconds=interval),
+                               name="otbr-ingest-loop")
+    log.info("background scheduler started (otbr ingest every %ss)", interval)
+    try:
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+        log.info("background scheduler stopped")
+
+
 def create_core_app() -> FastAPI:
     """Create the core FastAPI application."""
-    app = FastAPI(title="Thread Observability Core API", version=ADDON_VERSION)
+    app = FastAPI(
+        title="Thread Observability Core API",
+        version=ADDON_VERSION,
+        lifespan=_lifespan,
+    )
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> HTMLResponse:
@@ -364,6 +428,10 @@ def create_core_app() -> FastAPI:
                 cfg["influx"]["token"] = "***"
         except Exception as exc:  # noqa: BLE001
             cfg = {"error": str(exc)}
+        try:
+            ingestion = otbr_adapter.get_state()
+        except Exception as exc:  # noqa: BLE001
+            ingestion = {"error": str(exc)}
         return {
             "addon_version": ADDON_VERSION,
             "checked_at": _utc_now(),
@@ -375,6 +443,7 @@ def create_core_app() -> FastAPI:
             "storage": storage,
             "timeseries": ts_health,
             "config": cfg,
+            "ingestion": ingestion,
         }
 
     @app.get("/v1/dev/mcp-health")
@@ -385,5 +454,39 @@ def create_core_app() -> FastAPI:
             return {"ok": r.status_code == 200, "status_code": r.status_code}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "detail": str(exc)}
+
+    # -- OTBR ingestion (Phase 2.5) ---------------------------------------
+
+    @app.get("/v1/ingest/state")
+    def ingest_state() -> dict[str, object]:
+        try:
+            return otbr_adapter.get_state()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
+    @app.get("/v1/ingest/candidates")
+    async def ingest_candidates() -> dict[str, object]:
+        try:
+            cands = await otbr_adapter.list_candidates()
+            return {"count": len(cands), "candidates": cands}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc), "candidates": []}
+
+    @app.post("/v1/ingest/run")
+    async def ingest_run() -> dict[str, object]:
+        try:
+            return await otbr_adapter.ingest_once()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
+    @app.post("/v1/ingest/slug")
+    async def ingest_set_slug(payload: dict[str, str]) -> dict[str, object]:
+        slug = (payload or {}).get("slug", "").strip()
+        if not slug:
+            return {"error": "slug required"}
+        try:
+            return otbr_adapter.set_slug(slug)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
 
     return app
