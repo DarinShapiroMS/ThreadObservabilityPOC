@@ -539,6 +539,25 @@ def create_core_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 
+    @app.get("/v1/ingest/debug")
+    async def ingest_debug() -> dict[str, object]:
+        """Debug endpoint: fetch raw OTBR logs to inspect format."""
+        try:
+            ingest_st = otbr_adapter.get_state()
+            slug = ingest_st.get("slug")
+            if not slug:
+                return {"error": "no OTBR slug configured"}
+            # Fetch latest 50 lines from the OTBR addon
+            logs = await supervisor_client.get_addon_logs(slug=slug, lines=50)
+            return {
+                "slug": slug,
+                "log_line_count": len(logs),
+                "sample_lines": logs[-10:] if logs else [],
+                "raw_sample": "\n".join(logs[-20:]) if logs else "",
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
     # -- Node metadata (Phase 3) ------------------------------------------
 
     @app.get("/v1/nodes/all")

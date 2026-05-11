@@ -108,9 +108,14 @@ async def get_addon_info() -> dict[str, Any]:
     return {"summary": summary, "raw": info}
 
 
-async def get_addon_logs(lines: int = 200) -> list[str]:
-    """Return the last *lines* lines of the add-on's container log."""
-    text = await _get_text("/addons/self/logs")
+async def get_addon_logs(lines: int = 200, slug: str | None = None) -> list[str]:
+    """Return the last *lines* lines of an add-on's container log.
+
+    If slug is None, returns logs for this add-on (self). Otherwise fetches logs
+    for the add-on with the given slug.
+    """
+    path = f"/addons/{slug}/logs" if slug else "/addons/self/logs"
+    text = await _get_text(path)
     return text.splitlines()[-lines:]
 
 
