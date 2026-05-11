@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.9
+
+- Override base image's buggy legacy-services bundle with a noop s6-rc.d bundle (empty contents.d)
+- Prevents HA's s6-overlay from invoking suexec on legacy-services, eliminating the PID 1 crash
+- Allows native s6-rc.d core and mcp services to run cleanly without cascade restarts
+
 ## 0.1.8
 
 - Keep empty /etc/services.d directory (only delete cont-init.d) so HA legacy-services shim finds it, scans, finds nothing, and exits cleanly
