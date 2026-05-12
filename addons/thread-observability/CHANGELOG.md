@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.34 — API contract tests + Pydantic response schemas
+
+- **Pydantic response contracts** (`api/schemas.py`). Every public `/v1/...` endpoint now has a declared response model: `HealthResponse`, `TopologyResponse`, `RouteWalkResponse`, `NeighborsResponse`, `PartitionsResponse`, `IssuesResponse`, `PhantomsResponse`, `DevStatusResponse`, plus their nested row models. Models use `extra="allow"` so adding fields server-side is non-breaking, but required-field types are now enforced by tests.
+- **Contract test suite** (`tests/contract/`, 20 tests). Each endpoint is hit through FastAPI's `TestClient` against a seeded SQLite store and the response is validated against its Pydantic model. Catches every "API and UI disagree" class of bug at build time — e.g., a field rename, a type change, or a dropped key would fail CI instead of silently breaking the dashboard or an MCP consumer.
+- **Test count: 114** (up from 94). Existing unit tests untouched.
+- No runtime behaviour change — endpoint handlers still return plain `dict[str, object]` for forward compatibility. The schemas are the *contract*, validated in tests; we can opt individual endpoints into FastAPI's `response_model=` later if we want stricter shape enforcement at the wire.
+
 ## 0.9.33 — First-class routing + server-side path walk
 
 - **Schema v8: richer link rows.** The `links` table now carries the Matter NeighborTable fields previously dropped — `rx_on_when_idle`, `full_thread_device`, `full_network_data`, `link_frame_counter`, `mle_frame_counter` — plus the RouteTable flags `link_established` and `allocated`, plus a `partition_id` stamp so stale rows from prior partitions are detectable. Every Matter cluster-53 field that matters for routing decisions is now persisted as a first-class column.
