@@ -249,9 +249,25 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "description": (
             "Update this add-on to the latest version available in the store "
             "(equivalent to clicking 'Update' in the HA UI). Supervisor pulls the new "
-            "image / rebuilds from source and restarts. Pair with ha_check_for_update first."
+            "image / rebuilds from source and restarts. Resolves the store-side slug "
+            "from /store/addons (NOT /addons/self/info, whose slug carries a repo-hash "
+            "prefix that the store endpoint rejects on some installs, silently clearing "
+            "the install). Pass dry_run=true to verify the resolved endpoint without "
+            "dispatching the update. Pair with ha_check_for_update first."
         ),
-        "inputSchema": {"type": "object", "properties": {}, "required": []},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dry_run": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, resolve the slug and report what endpoint would be "
+                        "called, without POSTing. Default false."
+                    ),
+                }
+            },
+            "required": [],
+        },
     },
     {
         "name": "ha_set_auto_update",
@@ -876,9 +892,10 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
     if name == "ha_update_addon":
+        dry_run = bool(arguments.get("dry_run", False))
         try:
-            res = await supervisor_client.update_addon()
-            return {"action": "update", "result": res, "requested_at": _utc_now()}
+            res = await supervisor_client.update_addon(dry_run=dry_run)
+            return {"result": res, "requested_at": _utc_now()}
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
     if name == "ha_set_auto_update":

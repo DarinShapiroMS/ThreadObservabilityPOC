@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.47 — Fix `ha_update_addon` (correct store slug, honest error reporting, dry-run)
+
+Prerequisite for the 0.10.0 catalog rework: a tight in-loop deploy cycle. Three bugs in `update_addon()` were causing the addon to occasionally self-uninstall when the MCP tool was invoked, which is why the prior standing rule was to update only via the HA UI.
+
+- **Use the resolved store slug.** Previously the code tried `/addons/self/update` first, then `/store/addons/{self_slug}/update` where `self_slug` came from `/addons/self/info` and carried the local-repo hash prefix (`9e5048e8_thread-observability`). The store endpoint expects the *store* slug (`thread-observability`); on recent Supervisor versions, calling the store endpoint with the prefixed slug has been observed to be interpreted as a fresh install of a non-existent add-on, silently clearing the installed instance. The new `_resolve_store_slug()` reads `/store/addons`, matches by exact-slug or suffix-after-`_`, prefers installed entries, and returns the canonical store slug.
+- **Stop calling `/addons/self/update`.** It is unreliable across Supervisor versions and was the source of the misrouted-call symptom above. Only `/store/addons/{store_slug}/update` is dispatched.
+- **Stop swallowing transport errors as success.** Previously any `httpx.RequestError` mid-POST was coerced to `{status: "accepted", performed: true}`. Now it returns `{status: "transport_error", performed: "unknown", error_class, error, note}` so the caller knows to consult supervisor logs.
+- **New `dry_run=true` argument.** Performs slug resolution + version check + endpoint computation and returns the resolved endpoint *without* POSTing. Use this to verify the fix end-to-end on a live install before any real update is dispatched.
+- **Richer `http_error` shape.** Non-transport HTTP errors now include `http_status` and a truncated `response_body` so the caller can distinguish "no update available" (403/404), "bad request" (400 with detail), and "auth failure" (401) without parsing exception text.
+
+Tests: six new unit tests covering slug resolution, dry-run, store-unreachable fallback, transport-error surfacing, and HTTP-error reporting. Previous tests that asserted the now-removed `/addons/self/update` fallback were rewritten for the new behavior.
+
 ## 0.9.46 — Per-node Thread network identity, duplicate physical device detection, `wrong_network` reasoner rule
 
 Motivated by a live diagnosis where the addon could not self-diagnose a partition split caused by a re-commissioned device joining the *wrong* Thread network — the cluster 53 attributes that prove it (`NetworkName`, `ExtendedPanId`) were polled every cycle but never persisted. The fix is to extend already-collected data rather than add new pipelines.

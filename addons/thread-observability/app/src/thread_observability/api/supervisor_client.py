@@ -165,80 +165,131 @@ async def check_for_update() -> dict[str, Any]:
     }
 
 
-async def update_addon() -> dict[str, Any]:
+async def _resolve_store_slug(self_slug: str) -> tuple[str, str | None]:
+    """Resolve the Supervisor-store slug for this add-on.
+
+    ``/addons/self/info`` returns the *installed* slug, which on a local
+    repo includes the repo hash prefix (e.g. ``9e5048e8_thread-observability``).
+    The store-side endpoint ``/store/addons/{slug}/update`` expects the
+    *store* slug, which is the entry's ``slug`` field as advertised by
+    ``/store/addons``. These can differ across Supervisor versions, and
+    using the wrong one has been observed to cause Supervisor to interpret
+    the call as a fresh install of a non-existent add-on, silently clearing
+    the installed instance.
+
+    Returns ``(store_slug, repository_slug)``. Falls back to ``self_slug``
+    if the store listing cannot be reached or no match is found, with
+    ``repository_slug`` set to ``None``.
+    """
+    try:
+        store = await _get_json("/store/addons")
+    except Exception:  # noqa: BLE001
+        return self_slug, None
+    addons = store.get("addons") if isinstance(store, dict) else None
+    if not isinstance(addons, list):
+        return self_slug, None
+    # Strategy: match by installed=True + identical version, else by name
+    # suffix (drop the repo-hash prefix), else by exact slug.
+    suffix = self_slug.split("_", 1)[1] if "_" in self_slug else self_slug
+    candidates: list[dict[str, Any]] = []
+    for entry in addons:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("slug") == self_slug or entry.get("slug") == suffix:
+            candidates.append(entry)
+    # Prefer installed=True entries.
+    candidates.sort(key=lambda e: (not e.get("installed", False), e.get("slug", "")))
+    if candidates:
+        winner = candidates[0]
+        return winner.get("slug", self_slug), winner.get("repository")
+    return self_slug, None
+
+
+async def update_addon(dry_run: bool = False) -> dict[str, Any]:
     """Update this add-on to the latest version available in the store.
 
-    Equivalent to clicking "Update" in the HA UI. Supervisor will pull the
-    new image (or rebuild from source for local repos) and restart.
+    Equivalent to clicking "Update" in the HA UI. Supervisor pulls the new
+    image (or rebuilds from source for local repos) and restarts.
 
-    Supervisor's ``/addons/self/update`` alias is unreliable across versions;
-    the canonical path is ``/store/addons/{slug}/update``. We look up the
-    full slug from ``/addons/self/info`` first so the caller doesn't need
-    to know it.
+    With ``dry_run=True``, performs only the resolution + version check and
+    returns the endpoint that *would* be dispatched, without POSTing. Use
+    this to verify slug resolution before risking a real update.
+
+    Endpoint choice: the canonical path is ``/store/addons/{store_slug}/update``
+    where ``store_slug`` is resolved from ``/store/addons`` (NOT
+    ``/addons/self/info``, whose slug can carry a repo-hash prefix that the
+    store endpoint does not accept). ``/addons/self/update`` is intentionally
+    not used \u2014 it is unreliable across Supervisor versions and on some
+    installs is interpreted as a fresh install of the prefixed slug.
     """
     try:
         await reload_store()
     except Exception:  # noqa: BLE001
-        # Best-effort refresh only.
         pass
 
     info = await _get_json("/addons/self/info")
-    slug = info.get("slug")
-    if not slug:
+    self_slug = info.get("slug")
+    if not self_slug:
         raise RuntimeError("could not determine addon slug from /addons/self/info")
+
+    store_slug, repository = await _resolve_store_slug(self_slug)
+    endpoint = f"/store/addons/{store_slug}/update"
 
     current = info.get("version")
     latest = info.get("version_latest")
-    if not info.get("update_available"):
+    update_available = bool(info.get("update_available"))
+
+    base = {
+        "action": "update",
+        "self_slug": self_slug,
+        "store_slug": store_slug,
+        "repository": repository,
+        "endpoint": endpoint,
+        "current": current,
+        "latest": latest,
+        "update_available": update_available,
+    }
+
+    if dry_run:
+        return {**base, "status": "dry_run", "performed": False}
+
+    if not update_available:
+        return {**base, "status": "ok", "performed": False, "reason": "no_update_available"}
+
+    try:
+        resp = await _post(endpoint)
+        return {**base, "status": "ok", "performed": True, "response": resp}
+    except httpx.RequestError as exc:
+        # Transport errors during a self-update are NOT silently success;
+        # surface them so the caller can inspect supervisor logs.
         return {
-            "status": "ok",
-            "action": "update",
-            "performed": False,
-            "reason": "no_update_available",
-            "current": current,
-            "latest": latest,
+            **base,
+            "status": "transport_error",
+            "performed": "unknown",
+            "error_class": exc.__class__.__name__,
+            "error": str(exc),
+            "note": (
+                "POST connection interrupted. The supervisor may have started "
+                "the update before the response completed, or rejected the request "
+                "before dispatch. Inspect ha_get_supervisor_logs and ha_get_addon_state "
+                "to determine which."
+            ),
         }
-
-    endpoint_errors: list[tuple[str, int | None, str]] = []
-    for endpoint in ("/addons/self/update", f"/store/addons/{slug}/update"):
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code if exc.response is not None else None
+        body = ""
         try:
-            return await _post(endpoint)
-        except httpx.RequestError as exc:
-            return {
-                "status": "accepted",
-                "action": "update",
-                "performed": True,
-                "note": "request interrupted after dispatch; expected for self update",
-                "error": exc.__class__.__name__,
-                "endpoint": endpoint,
-            }
-        except httpx.HTTPStatusError as exc:
-            code = exc.response.status_code if exc.response is not None else None
-            endpoint_errors.append((endpoint, code, str(exc)))
-            # 403 can mean either no update available anymore (race) or permission on this path.
-            if code == 403:
-                refreshed = await _get_json("/addons/self/info")
-                if not refreshed.get("update_available"):
-                    return {
-                        "status": "ok",
-                        "action": "update",
-                        "performed": False,
-                        "reason": "no_update_available",
-                        "current": refreshed.get("version"),
-                        "latest": refreshed.get("version_latest"),
-                    }
-            # Try next endpoint for permission/path-related status codes.
-            if code in {401, 403, 404, 405}:
-                continue
-            raise
-
-    # If both endpoints failed, return a clear aggregated error.
-    raise RuntimeError(
-        "update dispatch failed on all known endpoints: "
-        + "; ".join(
-            f"{ep} status={code} err={msg}" for ep, code, msg in endpoint_errors
-        )
-    )
+            body = exc.response.text if exc.response is not None else ""
+        except Exception:  # noqa: BLE001
+            body = ""
+        return {
+            **base,
+            "status": "http_error",
+            "performed": False,
+            "http_status": code,
+            "error": str(exc),
+            "response_body": body[:500],
+        }
 
 
 async def set_auto_update(enabled: bool) -> dict[str, Any]:
