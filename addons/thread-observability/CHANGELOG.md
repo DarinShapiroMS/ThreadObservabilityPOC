@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.48 — Dev-loop smoke test (no functional change)
+
+Version bump only. Used to verify that the 0.9.47 fix to `ha_update_addon` correctly resolves the store slug and dispatches the update end-to-end on the live install. If you are reading this entry, the in-loop deploy cycle is unblocked.
+
 ## 0.9.47 — Fix `ha_update_addon` (correct store slug, honest error reporting, dry-run)
 
 Prerequisite for the 0.10.0 catalog rework: a tight in-loop deploy cycle. Three bugs in `update_addon()` were causing the addon to occasionally self-uninstall when the MCP tool was invoked, which is why the prior standing rule was to update only via the HA UI.

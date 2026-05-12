@@ -1,5 +1,5 @@
 name: Thread Observability
-version: 0.9.47
+version: 0.9.48
 slug: thread-observability
 description: Observe and troubleshoot Thread network health in Home Assistant.
 url: https://github.com/DarinShapiroMS/ThreadObservabilityPOC/tree/main/addons/thread-observability
