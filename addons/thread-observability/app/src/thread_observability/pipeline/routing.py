@@ -198,6 +198,22 @@ def walk_route_to_otbr(
         link_est = row["link_established"]
         link_est_b: bool | None = bool(link_est) if link_est is not None else None
 
+        # Direct-neighbor short-circuit. OpenThread fills NextHopRouterId on
+        # RouteTable rows even when the reporter has a direct MLE link to
+        # the destination — the field names the route-advertisement relay
+        # that last gossiped this route, not the actual forwarding next
+        # hop. ``PathCost == 1`` together with ``LinkEstablished == 1`` is
+        # the authoritative "direct link in use" signal; otherwise we'd
+        # render phantom A→B→A loops between any two routers that both
+        # reach the OTBR directly.
+        is_direct = (
+            path_cost is not None
+            and int(path_cost) == 1
+            and link_est_b is True
+        )
+        if is_direct:
+            nh_rid = None
+
         # Resolve the next hop's EUI.
         next_eui: str
         next_rid: int | None
@@ -334,6 +350,20 @@ def list_neighbors_enriched(
             if nh_rid is not None and nh_rid != NO_ROUTE_RID:
                 resolved = router_by_id.get(int(nh_rid))
                 nh_eui = resolved.get("eui64") if resolved else None
+            # Direct-neighbor short-circuit (same rule as walk_route_to_otbr):
+            # PathCost=1 + LinkEstablished=1 means the row's destination is
+            # the actual forwarding next hop; NextHopRouterId is just the
+            # route-advertisement relay. Surface the derived field so UI
+            # and AI consumers don't have to re-implement the rule. Raw
+            # next_hop_* fields are preserved for diagnostics.
+            path_cost_val = d.get("path_cost")
+            link_est_val = d.get("link_established")
+            is_direct = (
+                path_cost_val is not None
+                and int(path_cost_val) == 1
+                and link_est_val == 1
+            )
+            effective_nh_eui = nei if is_direct else nh_eui
             routes.append({
                 "neighbor_eui64": nei,
                 "name": name,
@@ -341,6 +371,11 @@ def list_neighbors_enriched(
                 "next_hop_router_id": nh_rid,
                 "next_hop_eui64": nh_eui,
                 "next_hop_name": name_by_eui.get(nh_eui) if nh_eui else None,
+                "effective_next_hop_eui64": effective_nh_eui,
+                "effective_next_hop_name": (
+                    name if is_direct else name_by_eui.get(nh_eui) if nh_eui else None
+                ),
+                "is_direct_link": is_direct,
                 "path_cost": d.get("path_cost"),
                 "lqi_in": d.get("lqi_in"),
                 "lqi_out": d.get("lqi_out"),

@@ -214,6 +214,196 @@ async def fetch_otbr_network_data(
         return None
 
 
+async def fetch_otbr_neighbors(
+    base_url: str, *, timeout: float = 10.0
+) -> list[dict[str, Any]] | None:
+    """GET ``{base_url}/node/neighbors`` → list of NeighborInfo dicts.
+
+    OpenThread OTBR REST exposes the leader/router's own MLE NeighborTable
+    here. Lets us treat the OTBR as a first-class reporter in the ``links``
+    table instead of a destination-only node. Best-effort: returns ``None``
+    if the endpoint is missing on this OTBR build (older releases) or any
+    fetch error occurs — Matter-side discovery still covers the rest.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(
+                f"{base_url}/node/neighbors",
+                headers={"Accept": "application/json"},
+            )
+        if resp.status_code >= 400:
+            return None
+        payload = resp.json()
+        if isinstance(payload, list):
+            return [p for p in payload if isinstance(p, dict)]
+        return None
+    except Exception as exc:  # noqa: BLE001
+        log.debug("otbr_rest: /node/neighbors fetch failed: %s", exc)
+        return None
+
+
+async def fetch_otbr_routers(
+    base_url: str, *, timeout: float = 10.0
+) -> list[dict[str, Any]] | None:
+    """GET ``{base_url}/node/routers`` → list of RouterInfo dicts.
+
+    This is the OTBR's RouteTable view — what it thinks the path to each
+    other router in the partition is, with per-hop LQI and the same
+    NextHopRouterId / PathCost / LinkEstablished fields as Matter cluster
+    53 attribute 8. Best-effort.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(
+                f"{base_url}/node/routers",
+                headers={"Accept": "application/json"},
+            )
+        if resp.status_code >= 400:
+            return None
+        payload = resp.json()
+        if isinstance(payload, list):
+            return [p for p in payload if isinstance(p, dict)]
+        return None
+    except Exception as exc:  # noqa: BLE001
+        log.debug("otbr_rest: /node/routers fetch failed: %s", exc)
+        return None
+
+
+def _otbr_field(entry: dict[str, Any], *keys: str) -> Any:
+    """Return the first non-None value among ``keys`` (case variants)."""
+    for k in keys:
+        v = entry.get(k)
+        if v is not None:
+            return v
+    return None
+
+
+def _otbr_eui_from(entry: dict[str, Any]) -> str | None:
+    raw = _otbr_field(entry, "ExtAddress", "extAddress", "ext_address")
+    if raw is None:
+        return None
+    try:
+        eui = _normalize_eui(str(raw))
+        if len(eui) == 16 and all(c in "0123456789abcdef" for c in eui):
+            return eui
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _otbr_coerce_int(v: Any) -> int | None:
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str):
+        s = v.strip()
+        try:
+            if s.startswith("0x") or s.startswith("0X"):
+                return int(s, 16)
+            return int(s)
+        except ValueError:
+            return None
+    return None
+
+
+def _otbr_tri(v: Any) -> int | None:
+    if v is None:
+        return None
+    return 1 if v else 0
+
+
+def _decode_otbr_neighbors(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Map OTBR REST ``/node/neighbors`` JSON to ``links`` row dicts.
+
+    Field names per OpenThread REST: ``ExtAddress``, ``Age``, ``Rloc16``,
+    ``LinkQualityIn``, ``LinkQualityOut``, ``AverageRssi``, ``LastRssi``,
+    ``FrameErrorRate``, ``MessageErrorRate``, ``IsChild``, ``RxOnWhenIdle``,
+    ``FullThreadDevice``, ``FullNetworkData``, optionally
+    ``LinkFrameCounter``, ``MleFrameCounter``. Unknown fields are ignored.
+    """
+    if not raw:
+        return []
+    out: list[dict[str, Any]] = []
+    for entry in raw:
+        eui = _otbr_eui_from(entry)
+        if not eui:
+            continue
+        out.append({
+            "neighbor_eui64": eui,
+            "rssi_avg": _otbr_coerce_int(_otbr_field(entry, "AverageRssi", "averageRssi")),
+            "rssi_last": _otbr_coerce_int(_otbr_field(entry, "LastRssi", "lastRssi")),
+            "lqi_in": _otbr_coerce_int(_otbr_field(entry, "LinkQualityIn", "linkQualityIn")),
+            "lqi_out": _otbr_coerce_int(_otbr_field(entry, "LinkQualityOut", "linkQualityOut")),
+            "is_child": _otbr_tri(_otbr_field(entry, "IsChild", "isChild")),
+            "age_seconds": _otbr_coerce_int(_otbr_field(entry, "Age", "age")),
+            "frame_error_rate": _otbr_coerce_int(
+                _otbr_field(entry, "FrameErrorRate", "frameErrorRate")
+            ),
+            "message_error_rate": _otbr_coerce_int(
+                _otbr_field(entry, "MessageErrorRate", "messageErrorRate")
+            ),
+            "link_frame_counter": _otbr_coerce_int(
+                _otbr_field(entry, "LinkFrameCounter", "linkFrameCounter")
+            ),
+            "mle_frame_counter": _otbr_coerce_int(
+                _otbr_field(entry, "MleFrameCounter", "mleFrameCounter")
+            ),
+            "rx_on_when_idle": _otbr_tri(_otbr_field(entry, "RxOnWhenIdle", "rxOnWhenIdle")),
+            "full_thread_device": _otbr_tri(
+                _otbr_field(entry, "FullThreadDevice", "fullThreadDevice")
+            ),
+            "full_network_data": _otbr_tri(
+                _otbr_field(entry, "FullNetworkData", "fullNetworkData")
+            ),
+        })
+    return out
+
+
+def _decode_otbr_routers(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Map OTBR REST ``/node/routers`` JSON to ``links`` row dicts (RouteTable).
+
+    Field names per OpenThread REST: ``ExtAddress``, ``Rloc16``, ``RouterId``,
+    ``NextHop`` (or ``NextHopRouterId``), ``PathCost``, ``LinkQualityIn``
+    / ``LqiIn``, ``LinkQualityOut`` / ``LqiOut``, ``Age``, ``Allocated``,
+    ``LinkEstablished``.
+    """
+    if not raw:
+        return []
+    out: list[dict[str, Any]] = []
+    for entry in raw:
+        eui = _otbr_eui_from(entry)
+        if not eui:
+            continue
+        out.append({
+            "neighbor_eui64": eui,
+            "rssi_avg": None,
+            "rssi_last": None,
+            "lqi_in": _otbr_coerce_int(
+                _otbr_field(entry, "LinkQualityIn", "LqiIn", "lqiIn", "linkQualityIn")
+            ),
+            "lqi_out": _otbr_coerce_int(
+                _otbr_field(entry, "LinkQualityOut", "LqiOut", "lqiOut", "linkQualityOut")
+            ),
+            "is_child": None,
+            "age_seconds": _otbr_coerce_int(_otbr_field(entry, "Age", "age")),
+            "frame_error_rate": None,
+            "message_error_rate": None,
+            "path_cost": _otbr_coerce_int(_otbr_field(entry, "PathCost", "pathCost")),
+            "router_id": _otbr_coerce_int(_otbr_field(entry, "RouterId", "routerId")),
+            "next_hop_router_id": _otbr_coerce_int(
+                _otbr_field(entry, "NextHopRouterId", "NextHop", "nextHop", "nextHopRouterId")
+            ),
+            "allocated": _otbr_tri(_otbr_field(entry, "Allocated", "allocated")),
+            "link_established": _otbr_tri(
+                _otbr_field(entry, "LinkEstablished", "linkEstablished")
+            ),
+        })
+    return out
+
+
 def _dataset_to_network_data(
     dataset: dict[str, Any] | None,
     network: dict[str, Any] | None,
@@ -387,10 +577,46 @@ async def ingest_once(store: SQLiteStore | None = None) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             log.warning("otbr_rest: network data persist failed: %s", exc)
 
+    # v11: persist the OTBR's own NeighborTable + RouteTable so the border
+    # router shows up as a first-class reporter in the ``links`` table.
+    # Without this, the OTBR's view of which routers it directly reaches
+    # is invisible — the mesh graph only has edges from non-OTBR routers
+    # pointing *at* the OTBR, with no symmetric back-edge. Best-effort:
+    # older OTBR builds may not expose these endpoints.
+    otbr_neighbors_persisted: int | None = None
+    otbr_routes_persisted: int | None = None
+    try:
+        neighbors_raw = await fetch_otbr_neighbors(base_url)
+        if neighbors_raw is not None:
+            neighbor_rows = _decode_otbr_neighbors(neighbors_raw)
+            s.replace_links_for_reporter(
+                eui64, "neighbor_table", neighbor_rows,
+                partition_id=partition_id,
+            )
+            otbr_neighbors_persisted = len(neighbor_rows)
+        routers_raw = await fetch_otbr_routers(base_url)
+        if routers_raw is not None:
+            route_rows = _decode_otbr_routers(routers_raw)
+            s.replace_links_for_reporter(
+                eui64, "route_table", route_rows,
+                partition_id=partition_id,
+            )
+            otbr_routes_persisted = len(route_rows)
+            # The OTBR's own router_id is the self-entry in its routers list.
+            for row in route_rows:
+                if row.get("neighbor_eui64") == eui64 and row.get("router_id") is not None:
+                    s.set_node_router_id(eui64, int(row["router_id"]))
+                    break
+    except Exception as exc:  # noqa: BLE001
+        log.warning("otbr_rest: OTBR neighbor/router ingest failed: %s", exc)
+
     log.info(
-        "otbr_rest: ingested OTBR eui=%s state=%s partition=%s router_id=%s leader_router=%s active_routers=%s network_data=%s",
+        "otbr_rest: ingested OTBR eui=%s state=%s partition=%s router_id=%s "
+        "leader_router=%s active_routers=%s network_data=%s neighbors=%s routes=%s",
         eui64, state, partition_id, router_id, leader_router_id, active_routers,
         "ok" if network_data_persisted else "skipped",
+        otbr_neighbors_persisted if otbr_neighbors_persisted is not None else "skipped",
+        otbr_routes_persisted if otbr_routes_persisted is not None else "skipped",
     )
     return {
         "error": None,
@@ -404,6 +630,8 @@ async def ingest_once(store: SQLiteStore | None = None) -> dict[str, Any]:
         "router_id": router_id,
         "rloc16": rloc16,
         "network_data_persisted": network_data_persisted,
+        "otbr_neighbors_persisted": otbr_neighbors_persisted,
+        "otbr_routes_persisted": otbr_routes_persisted,
     }
 
 
