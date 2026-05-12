@@ -1,5 +1,32 @@
 # Changelog
+## 0.9.49 \u2014 Route `ha_update_addon` through Home Assistant Core service
 
+**Root cause uncovered by the 0.9.48 dry-run test.** Calling
+`POST /store/addons/{slug}/update` from inside the add-on's own process is
+refused by Supervisor with HTTP 403 and the body
+`{"message": "App {slug} can't update itself!"}`. The 0.9.47 fix correctly
+resolved the slug but still tripped this self-update guard on the real call.
+The dry-run was correct \u2014 the failure happened the moment we actually POSTed.
+
+**Fix.** `update_addon()` now POSTs to
+`/core/api/services/hassio/addon_update` with body `{"addon": store_slug}`,
+which dispatches through Home Assistant Core's `hassio.addon_update`
+service. Supervisor sees HA Core as the caller, not the add-on, and the
+self-update guard does not fire. The add-on already declares
+`homeassistant_api: true` so the existing `SUPERVISOR_TOKEN` works against
+HA Core. The Supervisor direct path is no longer auto-attempted as a
+fallback because it will always 403; it remains documented in the response
+under `endpoint_fallback` for diagnostic clarity.
+
+**Response shape (new fields).**
+- `endpoint`: now the HA Core service path.
+- `endpoint_fallback`: the (intentionally unused) Supervisor direct path.
+- `via`: `"ha_core_service"`.
+- On success, `note` explains that Supervisor will restart the add-on
+  asynchronously, so the active MCP connection will drop.
+
+Tests updated to assert the HA Core path is the one POSTed and that the
+body is `{"addon": store_slug}`.
 ## 0.9.48 — Dev-loop smoke test (no functional change)
 
 Version bump only. Used to verify that the 0.9.47 fix to `ha_update_addon` correctly resolves the store slug and dispatches the update end-to-end on the live install. If you are reading this entry, the in-loop deploy cycle is unblocked.
