@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.45 — Three live-network fixes: analyze_node membership binding, reasoner-owned partition_split close, re_attached_node reporter-reattach guard
+
+Three independent bugs surfaced during the first live assessment of 0.9.44 against a real Thread network. All three were correctness gaps where a code path silently dropped or misattributed signal; fixing them required no schema change and no API change.
+
+- **Fix A — `analyze_node` now binds global issues via evidence inspection.** `analyze_node(eui)` previously filtered `list_active_issues()` by `issue.eui64 == eui`, which works for per-node issues but misses *global* issues (those opened with `eui64=None`) such as `partition_split`. A node sitting alone in a minority partition is clearly the affected device, yet the consultant view showed it with no open issues. New helper `_evidence_implicates_eui` scans the standard evidence shapes (`partitions[].members`, top-level `members`) and binds any global issue whose evidence references the queried EUI, tagging it with `implicated_via: "evidence"`. New tests cover both the positive bind and the negative (unrelated nodes do not pick the issue up).
+
+- **Fix B — reasoner is now the authoritative owner of `partition_split` close.** `partition_split` was opened by `matter_discovery._persist_matter_diagnostics` and only closed there — which means a single missed close path (matter-server WS hiccup, an empty poll where the close-on-empty fallback raced an unrelated exception, etc.) leaves the issue immortal. The reasoner runs every tick regardless of matter-server health, so it now also calls `topology.build_topology()` at the end of `run_reasoner` and closes any still-open `partition_split` whose live topology shows ≤ 1 partition. Discovery still owns the open path (it has the full per-router evidence); the reasoner owns the close-on-resolve path. New test covers the close-on-resolve flow.
+
+- **Fix C — `re_attached_node` suppressed when the reporter itself just re-attached.** When a router increments its own `parent_change_count` (it re-attached to a new parent), MLE establishes new sessions with every neighbor and each neighbor's `link_frame_counter` / `mle_frame_counter` — *as seen by this reporter* — resets to a fresh value. Without a guard the existing "frame counter dropped → emit `re_attached_node`" rule fires once per neighbor per poll attributed to the wrong devices. Observed live as one router triggering a storm of 6 spurious `re_attached_node` events every 35 s, same EUIs every cycle. Fix pre-computes the set of reporters whose `parent_change_count` strictly increased this cycle and skips the `re_attached_node` emission block for any reporter in that set. Two new tests cover both the suppression and the genuine-drop-still-fires path.
+
+Test baseline: 208 passed, 1 skipped (203 prior + 5 new).
+
 ## 0.9.44 — Bundle playbook corpus as package data
 
 Hotfix for 0.9.43. The playbook corpus loader resolved `_DEFAULT_CORPUS` by walking three directories up from `pipeline/playbooks.py`, which works for editable installs in dev but resolves to `/usr/lib/python3.12/playbooks/playbooks.json` after `pip install` inside the addon container — a path that doesn't exist. `analyze_node` and `lookup_playbook` therefore returned `{"error": "[Errno 2] No such file or directory: ..."}` in production.

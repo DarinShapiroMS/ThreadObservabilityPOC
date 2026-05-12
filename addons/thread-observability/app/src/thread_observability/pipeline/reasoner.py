@@ -394,6 +394,33 @@ def run_reasoner(
         if s.close_issue(int(issue["id"])):
             closed.append(int(issue["id"]))
 
+    # ---- v0.9.45: auto-close stale ``partition_split`` issues ----
+    # ``partition_split`` is *opened* by the matter_discovery stage (it
+    # has the full per-router partition evidence). The reasoner runs
+    # every tick regardless, so it's the right owner of the close-on-
+    # resolve path: if the current live topology shows only one
+    # partition (or none), any still-open partition_split issue is
+    # stale and should close. This makes the reasoner the single
+    # source of truth for issue *lifecycle* even when discovery
+    # closing the issue itself silently failed (observed live as a
+    # partition_split that resolved in topology but stayed open in
+    # the issues table).
+    try:
+        from . import topology as topology_mod  # noqa: PLC0415
+
+        topo = topology_mod.build_topology(store=s)
+        live_partitions = topo.get("partitions") or []
+        if len(live_partitions) <= 1:
+            for (kind, eui), issue in active_by_key.items():
+                if kind != "partition_split":
+                    continue
+                if s.close_issue(int(issue["id"])):
+                    closed.append(int(issue["id"]))
+    except Exception:  # noqa: BLE001
+        # Topology can fail in unit tests that stub the store; the
+        # close path is best-effort.
+        pass
+
     return {
         "ran_at": _iso(now_dt),
         "opened": opened,

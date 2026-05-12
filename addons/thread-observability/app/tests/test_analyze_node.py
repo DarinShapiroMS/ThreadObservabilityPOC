@@ -91,3 +91,59 @@ def test_analyze_timeline_includes_events_for_node(store: SQLiteStore) -> None:
     kinds = [r["kind"] for r in res["timeline"]["rows"]]
     assert "attach" in kinds
     assert "parent_change" in kinds
+
+
+def test_analyze_binds_global_partition_split_issue_via_evidence(
+    store: SQLiteStore,
+) -> None:
+    """A global ``partition_split`` issue whose evidence lists the EUI
+    as a singleton-partition member must show up in ``open_issues``."""
+    pb_mod.reset_cache_for_tests()
+    lonely = "aa" * 8
+    majority = "bb" * 8
+    store.upsert_node_metadata(eui64=lonely, friendly_name="Lonely", role="router")
+    store.upsert_node_metadata(eui64=majority, friendly_name="Big", role="router")
+    store.open_issue(
+        kind="partition_split",
+        severity="warning",
+        eui64=None,
+        evidence={
+            "partition_count": 2,
+            "partitions": [
+                {"partition_id": 1, "member_count": 1, "members": [lonely]},
+                {"partition_id": 2, "member_count": 1, "members": [majority]},
+            ],
+        },
+    )
+    res = an_mod.analyze_node(lonely, store=store)
+    assert len(res["open_issues"]) == 1
+    assert res["open_issues"][0]["kind"] == "partition_split"
+    assert res["open_issues"][0].get("implicated_via") == "evidence"
+    assert "partition_split" in res["matched_issue_kinds"]
+    pb_ids = {p["id"] for p in res["playbooks"]}
+    assert "partition_split" in pb_ids
+
+
+def test_analyze_does_not_implicate_unrelated_node_in_global_issue(
+    store: SQLiteStore,
+) -> None:
+    """A node NOT named in a global issue's evidence must not pick it up."""
+    pb_mod.reset_cache_for_tests()
+    inside = "aa" * 8
+    outside = "cc" * 8
+    store.upsert_node_metadata(eui64=outside, friendly_name="Outside", role="router")
+    store.open_issue(
+        kind="partition_split",
+        severity="warning",
+        eui64=None,
+        evidence={
+            "partition_count": 2,
+            "partitions": [
+                {"partition_id": 1, "member_count": 1, "members": [inside]},
+                {"partition_id": 2, "member_count": 1, "members": ["bb" * 8]},
+            ],
+        },
+    )
+    res = an_mod.analyze_node(outside, store=store)
+    assert res["open_issues"] == []
+    assert res["matched_issue_kinds"] == []

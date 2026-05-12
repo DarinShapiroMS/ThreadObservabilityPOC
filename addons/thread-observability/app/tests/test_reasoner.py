@@ -268,3 +268,33 @@ def test_observer_event_strictly_before_trigger_does_not_suppress(
     assert "suppressed_by" not in issues[0]["evidence"]
 
 
+def test_reasoner_closes_stale_partition_split_when_topology_resolved(
+    store: SQLiteStore,
+) -> None:
+    """v0.9.45: the reasoner owns ``partition_split`` close-on-resolve.
+
+    When live topology shows <= 1 partition, any still-open
+    partition_split issue is stale and must be closed by the reasoner
+    even if the discovery stage never ran the close path.
+    """
+    eui = "aa" * 8
+    store.upsert_node_metadata(eui64=eui, friendly_name="X", role="router")
+    issue_id = store.open_issue(
+        kind="partition_split",
+        severity="warning",
+        eui64=None,
+        evidence={
+            "partition_count": 2,
+            "partitions": [
+                {"partition_id": 1, "members": [eui]},
+                {"partition_id": 2, "members": ["bb" * 8]},
+            ],
+        },
+    )
+    assert any(i["id"] == issue_id for i in store.list_active_issues())
+
+    result = run_reasoner(store=store)
+    assert issue_id in result["closed"]
+    assert not any(i["id"] == issue_id for i in store.list_active_issues())
+
+

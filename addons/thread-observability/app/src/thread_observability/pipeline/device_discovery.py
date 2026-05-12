@@ -1063,6 +1063,30 @@ async def _persist_matter_diagnostics(
     rloc16_change_events = 0
     leaders_by_partition: dict[int, str] = {}
 
+    # v0.9.45: pre-compute the set of reporters that re-attached this
+    # cycle (parent_change_count strictly increased vs. the prior
+    # snapshot). When a reporter re-attaches, MLE establishes new
+    # sessions with all its neighbors and every neighbor's
+    # link/MLE frame counter in this reporter's view resets — that
+    # would otherwise emit one false ``re_attached_node`` per neighbor
+    # per poll, attributed to the wrong device. Suppressing the
+    # emission when the *reporter* re-attached is the right
+    # attribution: the reporter swapped parents, not its neighbors.
+    reporter_just_reattached: set[str] = set()
+    for _node_id, info in rich.items():
+        r_eui = info.get("eui64")
+        if not r_eui:
+            continue
+        r_diag = info.get("diagnostics") or {}
+        new_pcc = r_diag.get("parent_change_count")
+        old_pcc = (prior_by_eui.get(r_eui) or {}).get("parent_change_count")
+        if (
+            isinstance(new_pcc, int)
+            and isinstance(old_pcc, int)
+            and new_pcc > old_pcc
+        ):
+            reporter_just_reattached.add(r_eui)
+
     # Collect every EUI we observe this cycle, either as a reporter or as a
     # neighbor in any router's table. This drives the phantom sweep below.
     referenced: set[str] = set()
@@ -1159,6 +1183,14 @@ async def _persist_matter_diagnostics(
                 # We only check kept neighbours (present both before and
                 # after). Newly-added ones have no prior counter; removed
                 # ones already emitted link_lost.
+                #
+                # v0.9.45: skip when the *reporter* itself re-attached
+                # this cycle. Its new MLE session resets every
+                # neighbor's counter from its point of view, which
+                # would otherwise fire one false ``re_attached_node``
+                # per neighbor attributed to the wrong device.
+                if eui in reporter_just_reattached:
+                    continue
                 prior_fcs = diff.get("prior_frame_counters") or {}
                 table_by_neighbor = {
                     e.get("neighbor_eui64"): e for e in table

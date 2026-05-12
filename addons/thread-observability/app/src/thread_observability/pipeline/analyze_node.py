@@ -24,6 +24,36 @@ DEFAULT_BASELINE_DAYS = 7
 DEFAULT_RECENT_ISSUE_LIMIT = 5
 
 
+def _evidence_implicates_eui(evidence: Any, eui64: str) -> bool:
+    """Return True if a global issue's evidence references ``eui64``.
+
+    Currently scans the standard shape used by ``partition_split``::
+
+        {"partitions": [{"members": [eui, ...], ...}, ...]}
+
+    Plus a flat ``"members"`` array at the top level. Other global
+    issue kinds can extend this without changing callers — we look
+    for any obvious list-of-EUI in the evidence tree without
+    over-fitting to one schema.
+    """
+    if not isinstance(evidence, dict):
+        return False
+    # Direct member list.
+    members = evidence.get("members")
+    if isinstance(members, list) and eui64 in members:
+        return True
+    # Nested partitions[].members (partition_split shape).
+    partitions = evidence.get("partitions")
+    if isinstance(partitions, list):
+        for part in partitions:
+            if not isinstance(part, dict):
+                continue
+            part_members = part.get("members")
+            if isinstance(part_members, list) and eui64 in part_members:
+                return True
+    return False
+
+
 def analyze_node(
     eui64: str,
     *,
@@ -74,7 +104,24 @@ def analyze_node(
     parent_row = s.get_node(parent_eui) if parent_eui else None
 
     # --- issues -------------------------------------------------------
-    open_issues = [i for i in s.list_active_issues() if i.get("eui64") == eui64]
+    # Direct match: issues whose eui64 column equals this node.
+    direct_open = [i for i in s.list_active_issues() if i.get("eui64") == eui64]
+    # v0.9.45: global issues (eui64 IS NULL) can still implicate a
+    # specific node via their evidence — e.g. ``partition_split`` lists
+    # the EUIs in each partition and a node sitting alone in a minority
+    # partition is clearly the affected device. Bind those in by
+    # scanning the evidence for membership references. This keeps the
+    # consultant view useful for global-kind issues without changing
+    # the issues schema.
+    implicated_open: list[dict[str, Any]] = []
+    for issue in s.list_active_issues():
+        if issue.get("eui64"):
+            continue
+        if any(i.get("id") == issue.get("id") for i in direct_open):
+            continue
+        if _evidence_implicates_eui(issue.get("evidence"), eui64):
+            implicated_open.append({**issue, "implicated_via": "evidence"})
+    open_issues = direct_open + implicated_open
     # Recent closed issues — query a wide window and take last N.
     window_issues = s.list_issues_in_window(
         since=baseline_since,
