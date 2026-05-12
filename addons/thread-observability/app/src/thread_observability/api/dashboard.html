@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Thread Observability</title>
 <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<script src="https://unpkg.com/layout-base@2.0.1/layout-base.js"></script>
+<script src="https://unpkg.com/cose-base@2.2.0/cose-base.js"></script>
+<script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
 <style>
   :root {
     --bg:#0b1220; --panel:#111a2e; --panel2:#0f172a; --border:#1f2a44;
@@ -536,6 +539,112 @@ function renderDiagnostics(s) {
 let cy = null;
 let graphInitErr = false;
 
+// When loaded via plain <script> tags, cytoscape-fcose auto-registers itself
+// as the 'fcose' layout on the global cytoscape. We attempt to use it for
+// dramatically better node separation, and fall back to tuned built-in cose
+// when the CDN is unreachable.
+function fcoseAvailable() {
+  try {
+    // cytoscape-fcose extends cytoscape with a private symbol; the safest
+    // probe is to check if running a no-op layout with name 'fcose' throws.
+    // We do that lazily inside renderGraph via try/catch, but also gate on
+    // a module-presence sniff so we don't spam errors on every render.
+    return !!(window.cytoscapeFcose || window['cytoscape-fcose']
+      || (typeof cytoscape !== 'undefined' && cytoscape.layouts && cytoscape.layouts.fcose));
+  } catch (_) { return false; }
+}
+
+function graphLayoutOptions(nodeCount, { randomize = true } = {}) {
+  // Edge length grows with node count so dense networks spread out and
+  // sparse ones don't fly apart.
+  const ideal = Math.max(120, Math.min(240, 90 + nodeCount * 6));
+  const common = {
+    animate: false,
+    randomize,
+    fit: true,
+    padding: 40,
+    idealEdgeLength: ideal,
+    nodeRepulsion: 14000,
+  };
+  if (fcoseAvailable()) {
+    return Object.assign({}, common, {
+      name: 'fcose',
+      quality: 'proof',
+      nodeSeparation: 100,
+      gravity: 0.2,
+      gravityRange: 3.5,
+      gravityCompound: 1.5,
+      numIter: 2500,
+      tile: true,
+      tilingPaddingVertical: 30,
+      tilingPaddingHorizontal: 30,
+    });
+  }
+  return Object.assign({}, common, {
+    name: 'cose',
+    componentSpacing: 140,
+    nodeOverlap: 40,
+    gravity: 0.15,
+    numIter: 2500,
+  });
+}
+
+// Iteratively push apart any node pairs whose centers are within their
+// combined radius + margin. Bounded to ~60 passes so this never freezes.
+function separateOverlappingNodes(cy, margin = 18, maxPasses = 60) {
+  const nodes = cy.nodes();
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let moved = false;
+    for (let i = 0; i < nodes.length; i++) {
+      const a = nodes[i];
+      const pa = a.position();
+      const ra = (a.width() + a.height()) / 4;
+      for (let j = i + 1; j < nodes.length; j++) {
+        const b = nodes[j];
+        const pb = b.position();
+        const rb = (b.width() + b.height()) / 4;
+        const dx = pb.x - pa.x;
+        const dy = pb.y - pa.y;
+        const dist = Math.hypot(dx, dy) || 0.01;
+        const minDist = ra + rb + margin;
+        if (dist < minDist) {
+          const push = (minDist - dist) / 2;
+          const ux = dx / dist;
+          const uy = dy / dist;
+          a.position({ x: pa.x - ux * push, y: pa.y - uy * push });
+          b.position({ x: pb.x + ux * push, y: pb.y + uy * push });
+          moved = true;
+        }
+      }
+    }
+    if (!moved) break;
+  }
+  cy.fit(undefined, 40);
+}
+
+// Run the layout, catching the case where fcose was detected but the layout
+// engine still rejects it (e.g. extension partially loaded). Always finishes
+// with the overlap-separation pass.
+function runGraphLayout(cy, opts) {
+  try {
+    cy.layout(opts).run();
+  } catch (_) {
+    // Force the cose fallback.
+    const fallback = Object.assign({}, opts, {
+      name: 'cose', componentSpacing: 140, nodeOverlap: 40,
+    });
+    delete fallback.quality;
+    delete fallback.nodeSeparation;
+    delete fallback.tile;
+    delete fallback.tilingPaddingVertical;
+    delete fallback.tilingPaddingHorizontal;
+    delete fallback.gravityRange;
+    delete fallback.gravityCompound;
+    try { cy.layout(fallback).run(); } catch (_) {}
+  }
+  separateOverlappingNodes(cy);
+}
+
 async function renderGraph() {
   const showP = $('#graph-show-phantoms').checked;
   let topo;
@@ -645,9 +754,12 @@ async function renderGraph() {
         'target-arrow-color': '#facc15', 'z-index': 999,
       }},
     ],
-    layout: { name: 'cose', animate: false, idealEdgeLength: 110, nodeRepulsion: 9000, gravity: 0.4 },
+    layout: { name: 'preset' },
     wheelSensitivity: 0.2,
   });
+
+  // Run the real layout via the wrapper so fcose→cose fallback works on init.
+  runGraphLayout(cy, graphLayoutOptions(cy.nodes().length, { randomize: true }));
 
   // Click-to-trace: walk next_hop_to_otbr from the clicked node to the OTBR
   // and highlight the entire forwarding path. Click background to clear.
@@ -691,7 +803,10 @@ async function highlightPathToOtbr(startEui) {
 }
 
 $('#graph-show-phantoms').addEventListener('change', renderGraph);
-$('#graph-relayout').addEventListener('click', () => { if (cy) cy.layout({name:'cose', animate:false}).run(); });
+$('#graph-relayout').addEventListener('click', () => {
+  if (!cy) return;
+  runGraphLayout(cy, graphLayoutOptions(cy.nodes().length, { randomize: true }));
+});
 $('#show-phantoms').addEventListener('change', () => { if (lastStatus) renderNodesTable(lastStatus.all_nodes || []); });
 
 async function refresh() {

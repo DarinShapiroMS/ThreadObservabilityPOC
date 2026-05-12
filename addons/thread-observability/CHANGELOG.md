@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.10.1 — Graph layout: nodes always spaced out
+
+The Network Graph tab was unusable when more than a handful of devices were
+present — the built-in `cose` layout left nodes piled on top of each other,
+and the Re-layout button replayed the same stuck state. Two changes fix this:
+
+- Load `cytoscape-fcose` from CDN and use it as the default layout. fcose
+  produces dramatically better separation, especially across disconnected
+  components (phantom subgraphs, multiple Thread partitions). Falls back to
+  tuned built-in `cose` (with `componentSpacing`, `nodeOverlap`,
+  `randomize`) when the CDN is unreachable.
+- Run a deterministic post-layout overlap-resolution pass on every render
+  and on Re-layout, so any pairs the solver leaves too close get pushed
+  apart along their connecting vector before fit.
+
+Re-layout now always randomises so it can break out of stuck states instead
+of reseating into the same overlap.
+
+UI only — no API, schema, or tool changes.
+
 ## 0.10.0 — Phase 4: counter time-series
 
 Per-node MAC/MLE counters are now recorded as time-series samples each pipeline
