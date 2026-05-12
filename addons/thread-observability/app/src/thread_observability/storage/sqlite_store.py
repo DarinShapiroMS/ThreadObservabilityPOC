@@ -241,6 +241,29 @@ _MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS idx_network_data_observed ON network_data(observed_at DESC);
     """,
+    # v11: HA-entity-availability-based online signal. Until v11 the
+    # ``status`` column was derived from ``last_referenced_at`` recency
+    # (i.e. "did we see this EUI in any Matter cluster sweep recently").
+    # That definition diverges from the user's mental model — what the
+    # user actually cares about is "can HA control this device right
+    # now?". v11 introduces a first-class availability signal sourced
+    # from HA's entity states; ``last_referenced_at`` is preserved as a
+    # separate diagnostic field so the UI can surface mesh-vs-HA
+    # disagreement (mesh sees it but HA can't reach it = integration bug;
+    # HA sees it but mesh doesn't = sleepy child / stale registry).
+    #
+    # Columns:
+    #   available              — 1 (HA can reach at least one entity),
+    #                            0 (all entities unavailable/unknown),
+    #                            NULL (no availability lookup yet).
+    #   availability_source    — 'ha_entity' | 'otbr_rest' | 'unknown'.
+    #   availability_checked_at — ISO timestamp of the last lookup.
+    """
+    ALTER TABLE nodes ADD COLUMN available              INTEGER;
+    ALTER TABLE nodes ADD COLUMN availability_source    TEXT;
+    ALTER TABLE nodes ADD COLUMN availability_checked_at TEXT;
+    CREATE INDEX IF NOT EXISTS idx_nodes_available ON nodes(available);
+    """,
 ]
 
 
@@ -685,6 +708,42 @@ class SQLiteStore:
                 n += int(cur.rowcount or 0)
         return n
 
+    def apply_availability(
+        self,
+        updates: Iterable[tuple[str, bool | None, str]],
+    ) -> dict[str, int]:
+        """Stamp the ``available`` / ``availability_source`` columns.
+
+        ``updates`` is an iterable of ``(eui64, available, source)`` tuples,
+        where ``available`` is ``True``/``False``/``None`` and ``source`` is
+        one of ``'ha_entity'``, ``'otbr_rest'``, ``'unknown'``. EUIs not
+        already in ``nodes`` are silently skipped (same UPDATE-only contract
+        as :meth:`bump_last_referenced`).
+
+        Returns ``{applied, skipped}``.
+        """
+        ts = _utc_now()
+        applied = 0
+        skipped = 0
+        with self._tx() as conn:
+            for eui, avail, source in updates:
+                if not eui:
+                    continue
+                val = None if avail is None else (1 if avail else 0)
+                cur = conn.execute(
+                    "UPDATE nodes"
+                    "    SET available = ?,"
+                    "        availability_source = ?,"
+                    "        availability_checked_at = ?"
+                    "  WHERE eui64 = ?",
+                    (val, source, ts, eui),
+                )
+                if cur.rowcount:
+                    applied += int(cur.rowcount)
+                else:
+                    skipped += 1
+        return {"applied": applied, "skipped": skipped}
+
     def sweep_phantoms(self, threshold_seconds: int) -> dict[str, int]:
         """Set is_phantom on rows whose last_referenced_at is older than the
         threshold (or NULL). Returns counts of {marked, cleared}.
@@ -747,19 +806,31 @@ class SQLiteStore:
     ) -> dict[str, int]:
         """Recompute the ``status`` column for every node.
 
+        **v11 contract — availability-first.** "Online" now means "Home
+        Assistant can reach at least one entity backed by this device right
+        now", i.e. ``available = 1``. Mesh-side observation
+        (``last_referenced_at``) is preserved as an independent diagnostic
+        field but no longer drives the primary status — the two signals
+        intentionally disagree when something is wrong (mesh-visible but
+        HA-unreachable = Matter integration bug; HA-reachable but
+        mesh-invisible = sleepy child or bridged device).
+
         State machine (evaluated atomically against the current timestamp):
 
-        * ``online``       — ``last_referenced_at`` within ``offline_seconds``.
-        * ``offline``      — last referenced between ``offline_seconds`` and
-          ``phantom_seconds`` ago, OR HA-registered (``device_id`` not null)
-          regardless of age (HA-registered nodes never auto-purge).
-        * ``unregistered`` — never referenced AND no HA ``device_id``. Includes
-          rows inserted by neighbor-table sightings before discovery has had
-          a chance to associate them with an HA device.
+        * ``online``       — ``available = 1`` (HA can talk to it).
+        * ``offline``      — ``available = 0`` AND HA-registered
+          (``device_id`` not null), OR ``available IS NULL`` but the row
+          has a ``device_id`` (registry-known, availability not yet
+          probed). HA-registered nodes never auto-purge.
+        * ``unregistered`` — no ``device_id`` AND never referenced.
         * ``phantom``      — last referenced longer than ``phantom_seconds``
           ago AND not HA-registered. Eligible for ``purge_expired_nodes``.
 
-        ``is_phantom`` is mirrored from the new column for backwards compat.
+        The ``offline_seconds`` parameter is retained for backwards
+        compatibility but is now only consulted as a fallback when
+        availability has never been probed.
+
+        ``is_phantom`` is mirrored from ``status = 'phantom'``.
         ``status_changed_at`` is bumped only when the value actually changes.
 
         Returns ``{state: count}`` summary plus ``changed`` (number of rows
@@ -773,8 +844,6 @@ class SQLiteStore:
             datetime.now(tz=UTC) - timedelta(seconds=phantom_seconds)
         ).isoformat()
         with self._tx() as conn:
-            # Compute the new status per row in a single CASE expression so we
-            # don't fight ourselves with overlapping UPDATEs.
             cur = conn.execute(
                 """
                 UPDATE nodes
@@ -787,13 +856,23 @@ class SQLiteStore:
                   FROM (
                       SELECT eui64,
                              CASE
-                                 WHEN last_referenced_at IS NOT NULL
-                                  AND last_referenced_at >= ?  THEN 'online'
-                                 WHEN device_id IS NOT NULL    THEN 'offline'
-                                 WHEN last_referenced_at IS NOT NULL
-                                  AND last_referenced_at >= ?  THEN 'offline'
+                                 -- Primary signal: HA entity availability.
+                                 WHEN available = 1 THEN 'online'
+                                 WHEN available = 0 AND device_id IS NOT NULL
+                                     THEN 'offline'
+                                 -- Availability not yet probed: fall back to
+                                 -- last_referenced recency for registered
+                                 -- nodes; otherwise treat as unregistered.
+                                 WHEN available IS NULL
+                                  AND device_id IS NOT NULL
+                                  AND last_referenced_at IS NOT NULL
+                                  AND last_referenced_at >= ?
+                                     THEN 'online'
+                                 WHEN device_id IS NOT NULL THEN 'offline'
+                                 -- No device_id: aged out or never seen.
                                  WHEN last_referenced_at IS NULL THEN 'unregistered'
-                                 ELSE 'phantom'
+                                 WHEN last_referenced_at < ? THEN 'phantom'
+                                 ELSE 'unregistered'
                              END AS new_status
                         FROM nodes
                   ) AS calc

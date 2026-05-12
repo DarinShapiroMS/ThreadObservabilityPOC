@@ -502,6 +502,9 @@ def _build_phantom_list() -> dict[str, Any]:
             "partition_id": r.get("partition_id"),
             "last_seen": r.get("last_seen"),
             "last_referenced_at": r.get("last_referenced_at"),
+            "available": r.get("available"),
+            "availability_source": r.get("availability_source"),
+            "availability_checked_at": r.get("availability_checked_at"),
             "ha_device_path": ha_path,
         })
     return {

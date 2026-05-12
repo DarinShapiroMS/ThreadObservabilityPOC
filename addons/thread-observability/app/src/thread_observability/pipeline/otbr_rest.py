@@ -559,6 +559,16 @@ async def ingest_once(store: SQLiteStore | None = None) -> dict[str, Any]:
     # Mark referenced so phantom-sweep treats it as live.
     s.bump_last_referenced([eui64])
 
+    # v0.9.39: OTBR has no HA entity, so HA-availability scoring would
+    # leave it ``available IS NULL``. Stamp it ``True`` here — we just
+    # successfully hit ``/node`` and got back data, which is the OTBR
+    # equivalent of "reachable". Falls back to ``False`` is unnecessary
+    # because if the fetch had failed we'd have returned much earlier.
+    try:
+        s.apply_availability([(eui64, True, "otbr_rest")])
+    except Exception as exc:  # noqa: BLE001
+        log.debug("otbr apply_availability failed: %s", exc)
+
     # v10: persist Thread Network Data (partition-wide identity + routes /
     # services / BR servers). Best-effort: missing dataset endpoints are
     # logged at debug and skipped — OTBR ingest itself must not regress.

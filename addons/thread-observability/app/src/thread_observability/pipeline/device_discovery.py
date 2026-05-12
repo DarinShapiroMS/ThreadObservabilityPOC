@@ -960,7 +960,7 @@ async def discover_and_sync(store: SQLiteStore | None = None) -> dict[str, Any]:
 
     # Persist Thread diagnostics + neighbor/route tables harvested from
     # matter-server (cluster 53). Also detect partition splits.
-    diag_summary = _persist_matter_diagnostics(s, nodes)
+    diag_summary = await _persist_matter_diagnostics(s, nodes)
 
     # Evict stale link rows whose reporters have gone silent (~3\u00d7 discover
     # interval; configurable via env). Without this, zombie peers persist
@@ -985,7 +985,7 @@ async def discover_and_sync(store: SQLiteStore | None = None) -> dict[str, Any]:
     }
 
 
-def _persist_matter_diagnostics(
+async def _persist_matter_diagnostics(
     s: SQLiteStore,
     prior_nodes: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -1132,6 +1132,41 @@ def _persist_matter_diagnostics(
     offline_after_s = int(os.getenv("OFFLINE_AFTER_SECONDS", "900"))         # 15 min
     phantom_after_s = int(os.getenv("PHANTOM_AFTER_SECONDS",
                                      str(int(PHANTOM_THRESHOLD_HOURS * 3600))))  # 24h default
+
+    # v0.9.39: refresh per-node ``available`` from HA entity states before
+    # recomputing status. This is the canonical "can HA control it right
+    # now?" signal — the source of truth the user sees in the HA UI.
+    # ``last_referenced_at`` continues to track mesh-side visibility as an
+    # independent diagnostic field. Best-effort: any failure (missing
+    # token, REST 4xx, JSON error) leaves the columns unchanged and the
+    # recompute falls back to the legacy last_referenced_at heuristic.
+    avail_summary: dict[str, int] = {}
+    try:
+        from . import ha_availability  # local import to avoid circular load
+        device_avail = await ha_availability.fetch_device_availability()
+        if device_avail:
+            nodes_now = s.list_nodes()
+            # Map device_id -> eui64 from our authoritative node set.
+            updates: list[tuple[str, bool | None, str]] = []
+            for n in nodes_now:
+                dev_id = n.get("device_id")
+                eui = n.get("eui64")
+                if not eui or not dev_id:
+                    continue
+                if dev_id in device_avail:
+                    updates.append((eui, bool(device_avail[dev_id]), "ha_entity"))
+            if updates:
+                avail_summary = s.apply_availability(updates)
+                log.info(
+                    "availability: applied=%d skipped=%d (ha_devices=%d, nodes=%d)",
+                    avail_summary.get("applied", 0),
+                    avail_summary.get("skipped", 0),
+                    len(device_avail),
+                    len(nodes_now),
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("availability refresh failed: %s", exc)
+
     status_summary: dict[str, int] = {}
     try:
         status_summary = s.recompute_node_statuses(

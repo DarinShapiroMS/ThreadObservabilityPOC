@@ -8,9 +8,9 @@ from thread_observability.storage.sqlite_store import SQLiteStore
 
 
 def test_migrations_apply(store: SQLiteStore) -> None:
-    assert store.schema_version == 10
+    assert store.schema_version == 11
     stats = store.stats()
-    assert stats["schema_version"] == 10
+    assert stats["schema_version"] == 11
     assert stats["row_counts"]["events"] == 0
 
 
@@ -210,7 +210,7 @@ def test_reset_data_wipes_cache_tables_preserves_schema(store: SQLiteStore) -> N
     assert counts["events"] == 0
     assert counts["issues"] == 0
     # Schema migrations still recorded.
-    assert store.schema_version == 10
+    assert store.schema_version == 11
 
 
 def test_upsert_node_metadata_persists_ha_fields(store: SQLiteStore) -> None:
@@ -313,6 +313,89 @@ def test_recompute_node_statuses_state_machine(store: SQLiteStore) -> None:
     # is_phantom mirrors status=='phantom' for backwards compat.
     assert store.get_node(dead)["is_phantom"] == 1
     assert store.get_node(stale)["is_phantom"] == 0
+
+
+def test_apply_availability_updates_columns(store: SQLiteStore) -> None:
+    """v11: apply_availability stamps available/source/checked_at and is
+    UPDATE-only (skips unknown EUIs to preserve registry-first contract).
+    """
+    known = "aa" * 8
+    unknown = "ff" * 8
+    store.upsert_node_metadata(eui64=known, friendly_name="K", device_id="d1")
+
+    result = store.apply_availability([
+        (known, True, "ha_entity"),
+        (unknown, False, "ha_entity"),  # not in nodes → skipped
+        ("", True, "ha_entity"),         # empty → ignored
+    ])
+    assert result == {"applied": 1, "skipped": 1}
+
+    row = store.get_node(known)
+    assert row["available"] == 1
+    assert row["availability_source"] == "ha_entity"
+    assert row["availability_checked_at"] is not None
+
+    # Flip to unavailable.
+    store.apply_availability([(known, False, "ha_entity")])
+    assert store.get_node(known)["available"] == 0
+
+    # None preserves the source but clears availability (no data).
+    store.apply_availability([(known, None, "ha_entity")])
+    assert store.get_node(known)["available"] is None
+
+
+def test_recompute_node_statuses_availability_first(store: SQLiteStore) -> None:
+    """v11: HA entity availability is the primary online/offline signal.
+
+    Mesh-side ``last_referenced_at`` is the fallback only when availability
+    has never been probed (``available IS NULL``).
+    """
+    online_via_ha = "01" * 8     # available=1 → online (even with stale mesh ref)
+    offline_via_ha = "02" * 8    # available=0, registered → offline
+    null_avail_fresh = "03" * 8  # available=NULL, recent mesh ref → online (fallback)
+    null_avail_stale = "04" * 8  # available=NULL, stale mesh ref, registered → offline
+    mesh_only_phantom = "05" * 8 # no device_id, very stale → phantom
+
+    store.upsert_node_metadata(eui64=online_via_ha, friendly_name="A", device_id="d1")
+    store.upsert_node_metadata(eui64=offline_via_ha, friendly_name="B", device_id="d2")
+    store.upsert_node_metadata(eui64=null_avail_fresh, friendly_name="C", device_id="d3")
+    store.upsert_node_metadata(eui64=null_avail_stale, friendly_name="D", device_id="d4")
+    store.upsert_node_metadata(eui64=mesh_only_phantom)
+
+    # Apply availability for first two; leave the rest NULL.
+    store.apply_availability([
+        (online_via_ha, True, "ha_entity"),
+        (offline_via_ha, False, "ha_entity"),
+    ])
+
+    # Set last_referenced_at: online_via_ha is *stale* mesh-wise (proves HA
+    # availability wins over mesh recency); null_avail_fresh is fresh.
+    now = datetime.now(tz=UTC)
+    fresh_ts = now.isoformat()
+    stale_ts = (now - timedelta(hours=2)).isoformat()
+    ancient_ts = (now - timedelta(hours=48)).isoformat()
+    with store._tx() as conn:  # noqa: SLF001
+        conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?",
+                     (stale_ts, online_via_ha))
+        conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?",
+                     (fresh_ts, offline_via_ha))
+        conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?",
+                     (fresh_ts, null_avail_fresh))
+        conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?",
+                     (stale_ts, null_avail_stale))
+        conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?",
+                     (ancient_ts, mesh_only_phantom))
+
+    store.recompute_node_statuses(offline_seconds=900, phantom_seconds=24 * 3600)
+
+    # HA availability dominates mesh recency in both directions.
+    assert store.get_node(online_via_ha)["status"] == "online"
+    assert store.get_node(offline_via_ha)["status"] == "offline"
+    # Fallback path when available IS NULL.
+    assert store.get_node(null_avail_fresh)["status"] == "online"
+    assert store.get_node(null_avail_stale)["status"] == "offline"
+    # Mesh-only stays subject to phantom sweep.
+    assert store.get_node(mesh_only_phantom)["status"] == "phantom"
 
 
 def test_purge_expired_nodes_preserves_ha_registered(store: SQLiteStore) -> None:

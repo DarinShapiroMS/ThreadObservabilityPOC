@@ -125,6 +125,13 @@ def get_node_summary(
         "last_seen": node.get("last_seen"),
         "status": node.get("status") or infer_node_status(node),
         "status_changed_at": node.get("status_changed_at"),
+        "available": (
+            None if node.get("available") is None
+            else bool(node.get("available"))
+        ),
+        "availability_source": node.get("availability_source"),
+        "availability_checked_at": node.get("availability_checked_at"),
+        "last_referenced_at": node.get("last_referenced_at"),
     }
 
     if include_signal_strength:
@@ -356,6 +363,12 @@ def list_nodes_enriched(
             "status_changed_at": node.get("status_changed_at"),
             "is_phantom": bool(node.get("is_phantom")) or node.get("status") == "phantom",
             "last_referenced_at": node.get("last_referenced_at"),
+            "available": (
+                None if node.get("available") is None
+                else bool(node.get("available"))
+            ),
+            "availability_source": node.get("availability_source"),
+            "availability_checked_at": node.get("availability_checked_at"),
             "partition_id": partition_id,
             "partition_leader_eui64": leader_eui,
             "partition_leader_name": name_by_eui.get(leader_eui) if leader_eui else None,
