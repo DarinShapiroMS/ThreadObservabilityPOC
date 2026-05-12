@@ -463,6 +463,25 @@ _MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_pipeline_ticks_completed_at
         ON pipeline_ticks(completed_at DESC);
     """,
+    # v19 (0.10.0 / Phase 4 time-series): node_counter_samples — one
+    # row per (eui64, observation) recording the live MAC/MLE counter
+    # values at that tick. Identity stays scalar on ``nodes``; volatile
+    # counters move here so deltas can be computed correctly even when
+    # a node resets its counters (a re-attach makes the scalar go
+    # *down*, which the reasoner would misread as a huge negative spike).
+    """
+    CREATE TABLE IF NOT EXISTS node_counter_samples (
+        eui64         TEXT NOT NULL,
+        observed_at   TEXT NOT NULL,
+        tick_id       INTEGER,
+        counters_json TEXT NOT NULL,
+        PRIMARY KEY (eui64, observed_at)
+    );
+    CREATE INDEX IF NOT EXISTS idx_node_counter_samples_eui_ts
+        ON node_counter_samples(eui64, observed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_node_counter_samples_ts
+        ON node_counter_samples(observed_at DESC);
+    """,
 ]
 
 
@@ -1211,6 +1230,186 @@ class SQLiteStore:
                 d["stages"] = {"_raw": raw}
             out.append(d)
         return out
+
+    # -- node counter samples (v19, Phase 4) --------------------------
+
+    def record_counter_sample(
+        self,
+        *,
+        eui64: str,
+        counters: dict[str, Any],
+        tick_id: int | None = None,
+        observed_at: str | None = None,
+    ) -> bool:
+        """Insert a counter sample row, returning True on success.
+
+        Drops keys whose value is None so the JSON stays compact. Existing
+        rows with the same ``(eui64, observed_at)`` are kept (INSERT OR
+        IGNORE) — a single tick should record exactly one sample per node.
+        """
+        if not eui64:
+            return False
+        cleaned = {k: v for k, v in counters.items() if v is not None}
+        if not cleaned:
+            return False
+        ts = observed_at or _utc_now()
+        payload = json.dumps(cleaned, separators=(",", ":"), sort_keys=True)
+        with self._tx() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO node_counter_samples"
+                "(eui64, observed_at, tick_id, counters_json)"
+                " VALUES (?, ?, ?, ?)",
+                (eui64, ts, tick_id, payload),
+            )
+            return bool(cur.rowcount)
+
+    def get_counter_samples(
+        self,
+        *,
+        eui64: str,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 2000,
+    ) -> list[dict[str, Any]]:
+        """Return raw samples for one node within [since, until], oldest first.
+
+        ``since`` and ``until`` are ISO-8601 strings; if absent, no bound.
+        """
+        clauses: list[str] = ["eui64 = ?"]
+        params: list[Any] = [eui64]
+        if since:
+            clauses.append("observed_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("observed_at <= ?")
+            params.append(until)
+        params.append(max(1, min(int(limit), 100_000)))
+        sql = (
+            "SELECT eui64, observed_at, tick_id, counters_json"
+            " FROM node_counter_samples WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY observed_at ASC LIMIT ?"
+        )
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            raw = d.pop("counters_json", None)
+            try:
+                d["counters"] = json.loads(raw) if raw else {}
+            except Exception:  # noqa: BLE001
+                d["counters"] = {"_raw": raw}
+            out.append(d)
+        return out
+
+    def count_counter_samples(self) -> int:
+        """Return total row count in ``node_counter_samples``."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM node_counter_samples"
+            ).fetchone()
+        return int(row[0] or 0)
+
+    def prune_counter_samples(
+        self,
+        *,
+        full_resolution_days: int,
+        sampled_archive_days: int,
+    ) -> dict[str, Any]:
+        """Apply Phase 4 retention to ``node_counter_samples``.
+
+        Rows newer than ``full_resolution_days`` are kept at full resolution.
+        Rows between that cutoff and ``sampled_archive_days`` are downsampled
+        to 5-minute averages per (eui64, bucket). Rows older than
+        ``sampled_archive_days`` are deleted.
+
+        Returns ``{deleted, downsampled, kept}`` counts.
+        """
+        now = datetime.now(tz=UTC)
+        full_cutoff = (now - timedelta(days=int(full_resolution_days))).isoformat()
+        archive_cutoff = (now - timedelta(days=int(sampled_archive_days))).isoformat()
+
+        deleted_old = 0
+        downsampled = 0
+
+        with self._tx() as conn:
+            # 1. Drop anything beyond the archive horizon.
+            cur = conn.execute(
+                "DELETE FROM node_counter_samples WHERE observed_at < ?",
+                (archive_cutoff,),
+            )
+            deleted_old = cur.rowcount or 0
+
+            # 2. Downsample rows between archive_cutoff and full_cutoff.
+            # SQLite has no nice 5-min bucket function; do it in Python.
+            rows = conn.execute(
+                "SELECT eui64, observed_at, counters_json"
+                " FROM node_counter_samples"
+                " WHERE observed_at >= ? AND observed_at < ?"
+                " ORDER BY eui64, observed_at",
+                (archive_cutoff, full_cutoff),
+            ).fetchall()
+
+            buckets: dict[tuple[str, str], list[dict[str, Any]]] = {}
+            for r in rows:
+                ts = r["observed_at"]
+                try:
+                    dt = datetime.fromisoformat(ts)
+                except ValueError:
+                    continue
+                bucket_minute = (dt.minute // 5) * 5
+                bucket_dt = dt.replace(minute=bucket_minute, second=0, microsecond=0)
+                key = (r["eui64"], bucket_dt.isoformat())
+                try:
+                    cnt = json.loads(r["counters_json"]) if r["counters_json"] else {}
+                except Exception:  # noqa: BLE001
+                    cnt = {}
+                if isinstance(cnt, dict):
+                    buckets.setdefault(key, []).append(cnt)
+
+            for (eui, bucket_ts), samples in buckets.items():
+                if len(samples) <= 1:
+                    # Nothing to compress; skip.
+                    continue
+                # Average across samples in this bucket.
+                avg: dict[str, float] = {}
+                for s in samples:
+                    for k, v in s.items():
+                        if isinstance(v, (int, float)):
+                            avg[k] = avg.get(k, 0.0) + float(v)
+                if not avg:
+                    continue
+                n = float(len(samples))
+                avg = {k: round(v / n, 3) for k, v in avg.items()}
+                payload = json.dumps(avg, separators=(",", ":"), sort_keys=True)
+
+                # Delete the originals in this bucket window.
+                # Bucket spans [bucket_ts, bucket_ts + 5min).
+                bucket_dt = datetime.fromisoformat(bucket_ts)
+                end_ts = (bucket_dt + timedelta(minutes=5)).isoformat()
+                conn.execute(
+                    "DELETE FROM node_counter_samples"
+                    " WHERE eui64 = ? AND observed_at >= ? AND observed_at < ?",
+                    (eui, bucket_ts, end_ts),
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO node_counter_samples"
+                    "(eui64, observed_at, tick_id, counters_json)"
+                    " VALUES (?, ?, NULL, ?)",
+                    (eui, bucket_ts, payload),
+                )
+                downsampled += len(samples)
+
+            kept_row = conn.execute(
+                "SELECT COUNT(*) FROM node_counter_samples"
+            ).fetchone()
+
+        return {
+            "deleted": int(deleted_old),
+            "downsampled": int(downsampled),
+            "kept": int(kept_row[0] or 0),
+        }
 
     # -- network data (v10) -------------------------------------------
 

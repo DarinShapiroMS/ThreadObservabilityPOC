@@ -1382,6 +1382,25 @@ async def _persist_matter_diagnostics(
         except Exception as exc:  # noqa: BLE001
             log.warning("Failed to persist diagnostics for %s: %s", eui, exc)
 
+        # v19 (0.10.0 / Phase 4): also persist the volatile counters as a
+        # time-series sample so the reasoner / counter_series tool can
+        # compute correct deltas across ticks. Best-effort; never block
+        # the pipeline on this.
+        try:
+            counter_keys = (
+                "tx_total_count", "tx_retry_count",
+                "tx_err_cca_count", "tx_err_abort_count", "tx_err_busy_channel_count",
+                "rx_total_count", "rx_duplicated_count",
+                "rx_err_no_frame_count", "rx_err_sec_count", "rx_err_fcs_count",
+                "parent_change_count", "attach_attempt_count",
+                "partition_id_change_count", "better_partition_attach_attempt_count",
+            )
+            counters = {k: diag.get(k) for k in counter_keys if diag.get(k) is not None}
+            if counters:
+                s.record_counter_sample(eui64=eui, counters=counters)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("record_counter_sample failed for %s: %s", eui, exc)
+
         # v17 (0.9.46): persist hardware identity (vendor_id, product_id,
         # serial_number) so duplicate physical devices (same hardware
         # commissioned under multiple EUI64s) can be detected.
@@ -1524,6 +1543,24 @@ async def _persist_matter_diagnostics(
             )
     except Exception as exc:  # noqa: BLE001
         log.warning("purge_expired_nodes failed: %s", exc)
+
+    # v19 (0.10.0 / Phase 4): apply retention to node_counter_samples.
+    # Downsample rows older than full_resolution_days to 5-minute averages,
+    # then drop rows older than sampled_archive_days. Best-effort.
+    try:
+        from ..config import get_config as _get_config
+        ret = _get_config().retention
+        pruned = s.prune_counter_samples(
+            full_resolution_days=ret.full_resolution_days,
+            sampled_archive_days=ret.sampled_archive_days,
+        )
+        if pruned.get("deleted") or pruned.get("downsampled"):
+            log.info(
+                "prune_counter_samples: deleted=%d downsampled=%d kept=%d",
+                pruned["deleted"], pruned["downsampled"], pruned["kept"],
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("prune_counter_samples failed: %s", exc)
 
     # ``recompute_node_statuses`` (above) is the single source of truth
     # for phantom state since v0.9.40 — the legacy ``sweep_phantoms``

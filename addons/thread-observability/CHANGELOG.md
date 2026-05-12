@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.10.0 — Phase 4: counter time-series
+
+Per-node MAC/MLE counters are now recorded as time-series samples each pipeline
+tick, so trends and resets become first-class signals instead of single-point
+snapshots. Tool count 34 → 36. Not breaking.
+
+**New tools (read-only, envelope-wrapped):**
+- `get_counter_series` — returns raw or 5-minute-bucketed counter samples for
+  a single node within an optional time window, plus per-counter
+  `{delta, reset_detected, first, last}` summary. `resolution` is `raw` or
+  `5min`.
+- `compare_node_counters` — runs `get_counter_series` for two nodes over the
+  same window and produces a `peer_summary` flagging counters whose deltas
+  diverge by ≥ 2× between the pair (useful for "is this one node behaving
+  worse than its neighbors?").
+
+**Storage / schema:**
+- Schema v19. New table `node_counter_samples (eui64, observed_at, tick_id,
+  counters_json)` with composite PK `(eui64, observed_at)` plus per-eui and
+  per-timestamp indexes.
+- New `SQLiteStore` methods: `record_counter_sample`, `get_counter_samples`,
+  `count_counter_samples`, `prune_counter_samples`.
+
+**Pipeline:**
+- `device_discovery` now records a counter sample for each node after
+  `set_node_diagnostics` succeeds (14 MAC/MLE counter keys; `None` values
+  filtered).
+- After the existing `purge_expired_nodes` call, the runner now also calls
+  `prune_counter_samples` using the configured retention window
+  (`full_resolution_days=3`, `sampled_archive_days=14` by default): rows
+  older than the archive horizon are deleted; rows in the middle window are
+  down-sampled to 5-minute buckets via numeric averaging.
+
+**Tests:** 249 passed, 1 skipped (was 235 / 1).
+
 ## 0.9.57 — Phase 3: triage entry points
 
 Adds three high-signal read tools so an AI agent (or human) can drive a triage

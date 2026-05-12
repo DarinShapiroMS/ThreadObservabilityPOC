@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from . import supervisor_client
 from . import triage as triage_mod
+from . import counter_series as counter_series_mod
 from ..config import get_config
 from ..health import build_health_snapshot as _build_health_snapshot
 from ..pipeline import nodes as nodes_mod
@@ -557,6 +558,51 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "required": [],
         },
     },
+    # ---- Phase 4 counter time-series tools --------------------------------
+    {
+        "name": "get_counter_series",
+        "description": (
+            "Use when: investigating whether a node's MAC/MLE counters are climbing (tx_retry, tx_err_cca, parent_change, "
+            "attach_attempt). Returns the time-series of selected counter values for one node over [since, until], plus "
+            "per-counter deltas (last - first). Detects counter resets (re-attach) and reports them explicitly instead "
+            "of misreading them as a huge negative spike. "
+            "Returns: {eui64, since, until, resolution, series: [{observed_at, counters}, ...], deltas: {<name>: {delta, reset_detected, first, last}}}. "
+            "Caveats: requires Phase 4 schema (v19+); samples only exist for ticks recorded after upgrade."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "eui64": {"type": "string"},
+                "counter_names": {"type": "array", "items": {"type": "string"}},
+                "since": {"type": "string", "description": "ISO-8601; default 6h ago"},
+                "until": {"type": "string", "description": "ISO-8601; default now"},
+                "resolution": {"type": "string", "enum": ["raw", "5min"], "default": "raw"},
+            },
+            "required": ["eui64"],
+        },
+    },
+    {
+        "name": "compare_node_counters",
+        "description": (
+            "Use when: a node looks unhealthy and you want to know whether a peer on the same partition is degrading "
+            "the same way. Returns counter series for two nodes side-by-side over the same window, plus a peer_summary "
+            "flagging counters where one side's delta is at least 2x the other. "
+            "Returns: {a: {series, deltas}, b: {series, deltas}, peer_summary: {flagged, flagged_count}}. "
+            "Caveats: requires Phase 4 schema (v19+); use list_all_nodes to find a healthy peer first."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "eui64_a": {"type": "string"},
+                "eui64_b": {"type": "string"},
+                "counter_names": {"type": "array", "items": {"type": "string"}},
+                "since": {"type": "string"},
+                "until": {"type": "string"},
+                "resolution": {"type": "string", "enum": ["raw", "5min"], "default": "raw"},
+            },
+            "required": ["eui64_a", "eui64_b"],
+        },
+    },
 ]
 
 _TOOL_MAP = {t["name"]: t for t in TOOL_DEFS}
@@ -706,6 +752,8 @@ _READ_TOOLS: frozenset[str] = frozenset({
     "start_triage",
     "get_environment",
     "get_pipeline_health",
+    "get_counter_series",
+    "compare_node_counters",
 })
 
 
@@ -1064,6 +1112,31 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
         try:
             limit = int(arguments.get("limit", 20))
             return triage_mod.get_pipeline_health(limit=limit)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
+    # ---- Phase 4 counter time-series tools ----------------------------
+    if name == "get_counter_series":
+        try:
+            return counter_series_mod.get_counter_series(
+                eui64=str(arguments.get("eui64") or ""),
+                counter_names=arguments.get("counter_names") or None,
+                since=arguments.get("since"),
+                until=arguments.get("until"),
+                resolution=str(arguments.get("resolution") or "raw"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "compare_node_counters":
+        try:
+            return counter_series_mod.compare_node_counters(
+                eui64_a=str(arguments.get("eui64_a") or ""),
+                eui64_b=str(arguments.get("eui64_b") or ""),
+                counter_names=arguments.get("counter_names") or None,
+                since=arguments.get("since"),
+                until=arguments.get("until"),
+                resolution=str(arguments.get("resolution") or "raw"),
+            )
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 
