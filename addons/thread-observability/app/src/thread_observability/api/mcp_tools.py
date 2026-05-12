@@ -171,9 +171,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
     {
         "name": "ha_get_addon_logs",
         "description": (
-            "Return the tail of the Supervisor container log for this add-on. "
+            "Return the tail of the Supervisor container log for an add-on. "
+            "Defaults to this add-on (self) when ``slug`` is omitted; pass a "
+            "Supervisor add-on slug (e.g. ``core_openthread_border_router``, "
+            "``core_matter_server``) to fetch that add-on's container log instead. "
             "Captures s6-overlay/startup output that the in-process Python logger misses. "
-            "Use this to diagnose crash loops or boot failures."
+            "Use this to diagnose crash loops, boot failures, or correlate "
+            "OTBR/Matter server events with Thread mesh state."
         ),
         "inputSchema": {
             "type": "object",
@@ -182,7 +186,14 @@ TOOL_DEFS: list[dict[str, Any]] = [
                     "type": "integer",
                     "description": "Lines to return (default 200, max 1000).",
                     "default": 200,
-                }
+                },
+                "slug": {
+                    "type": "string",
+                    "description": (
+                        "Supervisor add-on slug. Omit (or null) for this "
+                        "add-on's own logs."
+                    ),
+                },
             },
             "required": [],
         },
@@ -287,6 +298,38 @@ TOOL_DEFS: list[dict[str, Any]] = [
                 "event_type": {"type": "string"},
                 "since":      {"type": "string", "description": "ISO-8601 timestamp"},
                 "limit":      {"type": "integer", "default": 100, "minimum": 1, "maximum": 1000},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_node_flap_history",
+        "description": (
+            "Return the per-node status_change history (online/offline/phantom "
+            "transitions) emitted by recompute_node_statuses. Each call returns "
+            "the most-recent transitions (newest first) plus an aggregate "
+            "flap_counts map keyed by EUI. Use this to rank flappers: a high "
+            "total in a short window points to an unstable router or to a "
+            "device with multiple stale Matter operational identities. Available "
+            "since v0.9.41; transitions before that release are not recorded."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "eui64": {
+                    "type": "string",
+                    "description": "Restrict history to a single EUI-64 (lower-case hex).",
+                },
+                "since": {
+                    "type": "string",
+                    "description": "ISO-8601 timestamp; only transitions at or after this time are returned.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 500,
+                    "minimum": 1,
+                    "maximum": 5000,
+                },
             },
             "required": [],
         },
@@ -577,11 +620,18 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             return {"error": str(exc), "hint": "Supervisor unreachable; running outside HA?"}
     if name == "ha_get_addon_logs":
         n = max(1, min(int(arguments.get("lines", 200)), 1000))
+        slug = arguments.get("slug") or None
+        if slug is not None:
+            slug = str(slug).strip() or None
         try:
-            lines = await supervisor_client.get_addon_logs(n)
-            return {"lines": lines, "count": len(lines), "source": "supervisor:/addons/self/logs"}
+            lines = await supervisor_client.get_addon_logs(n, slug=slug)
+            source = (
+                f"supervisor:/addons/{slug}/logs" if slug
+                else "supervisor:/addons/self/logs"
+            )
+            return {"lines": lines, "count": len(lines), "source": source, "slug": slug}
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": str(exc), "slug": slug}
     if name == "ha_get_supervisor_logs":
         n = max(1, min(int(arguments.get("lines", 200)), 1000))
         try:
@@ -648,6 +698,15 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 limit=int(arguments.get("limit", 100)),
             )
             return {"events": events, "count": len(events)}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "get_node_flap_history":
+        try:
+            return get_store().get_node_flap_history(
+                eui64=arguments.get("eui64"),
+                since=arguments.get("since"),
+                limit=int(arguments.get("limit", 500)),
+            )
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
     if name == "insert_test_event":

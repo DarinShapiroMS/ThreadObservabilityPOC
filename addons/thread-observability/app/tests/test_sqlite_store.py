@@ -484,3 +484,67 @@ def test_list_children_filters_neighbors(store: SQLiteStore) -> None:
     assert out["children"][0]["eui64"] == child
     assert out["children"][0]["rx_on_when_idle"] == 0
     assert out["is_at_capacity"] is False
+
+
+# ---------------------------------------------------------------------------
+# v0.9.41: status_change event emission + flap history
+# ---------------------------------------------------------------------------
+
+
+def test_recompute_node_statuses_emits_status_change_events(store: SQLiteStore) -> None:
+    """v0.9.41: every status transition is persisted to the events table.
+
+    The first recompute populates baseline state (NULL -> default 'online')
+    which we treat as a transition; flipping availability should then emit
+    an additional online->offline row in events.
+    """
+    eui = "aa" * 8
+    store.upsert_node_metadata(eui64=eui, friendly_name="A", device_id="d1")
+    store.apply_availability([(eui, True, "ha_entity")])
+
+    s1 = store.recompute_node_statuses(offline_seconds=900, phantom_seconds=24 * 3600)
+    # No availability flip yet — only the implicit DEFAULT 'online' -> 'online'
+    # path runs, which is a no-op (old == new), so no event row.
+    assert s1["transitions"] == 0
+
+    # Now flip to unavailable; recompute should write one status_change row.
+    store.apply_availability([(eui, False, "ha_entity")])
+    s2 = store.recompute_node_statuses(offline_seconds=900, phantom_seconds=24 * 3600)
+    assert s2["transitions"] == 1
+    assert s2["changed"] == 1
+
+    events = store.query_events(eui64=eui, event_type="status_change")
+    assert len(events) == 1
+    payload = events[0]["payload"]
+    assert payload["from"] == "online"
+    assert payload["to"] == "offline"
+
+
+def test_get_node_flap_history_aggregates_counts(store: SQLiteStore) -> None:
+    """v0.9.41: get_node_flap_history returns transitions + per-EUI counts."""
+    a = "aa" * 8
+    b = "bb" * 8
+    store.upsert_node_metadata(eui64=a, device_id="d1")
+    store.upsert_node_metadata(eui64=b, device_id="d2")
+
+    # Drive a few transitions through availability flips.
+    store.apply_availability([(a, True, "ha_entity"), (b, True, "ha_entity")])
+    store.recompute_node_statuses(offline_seconds=900, phantom_seconds=24 * 3600)
+    store.apply_availability([(a, False, "ha_entity")])
+    store.recompute_node_statuses(offline_seconds=900, phantom_seconds=24 * 3600)
+    store.apply_availability([(a, True, "ha_entity"), (b, False, "ha_entity")])
+    store.recompute_node_statuses(offline_seconds=900, phantom_seconds=24 * 3600)
+
+    hist = store.get_node_flap_history(limit=50)
+    assert hist["count"] == 3
+    counts = hist["flap_counts"]
+    assert counts[a]["total"] == 2
+    assert counts[a]["by_transition"]["online->offline"] == 1
+    assert counts[a]["by_transition"]["offline->online"] == 1
+    assert counts[b]["total"] == 1
+    assert counts[b]["by_transition"]["online->offline"] == 1
+
+    # eui64 filter restricts to a single device.
+    only_a = store.get_node_flap_history(eui64=a, limit=50)
+    assert only_a["count"] == 2
+    assert set(only_a["flap_counts"].keys()) == {a}

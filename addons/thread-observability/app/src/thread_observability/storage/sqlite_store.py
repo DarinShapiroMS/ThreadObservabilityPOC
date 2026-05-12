@@ -822,6 +822,11 @@ class SQLiteStore:
 
         ``status_changed_at`` is bumped only when the value actually changes.
 
+        Every status transition is persisted as a ``status_change`` row in
+        the ``events`` table (payload: ``{"from": old, "to": new}``) so the
+        flap history can be reconstructed after the fact via
+        ``query_events`` or ``get_node_flap_history``.
+
         Returns ``{state: count}`` summary plus ``changed`` (number of rows
         whose status flipped this call).
         """
@@ -832,38 +837,62 @@ class SQLiteStore:
         phantom_cutoff = (
             datetime.now(tz=UTC) - timedelta(seconds=phantom_seconds)
         ).isoformat()
+        # Compute the new status per node in one common-table-expression so
+        # we can both (a) emit a status_change event for each transition and
+        # (b) update the row, all inside a single transaction.
+        calc_sql = """
+            SELECT eui64, status AS old_status,
+                   CASE
+                       -- Primary signal: HA entity availability.
+                       WHEN available = 1 THEN 'online'
+                       WHEN available = 0 AND device_id IS NOT NULL
+                           THEN 'offline'
+                       -- Availability not yet probed: fall back to
+                       -- last_referenced recency for registered nodes;
+                       -- otherwise treat as unregistered.
+                       WHEN available IS NULL
+                        AND device_id IS NOT NULL
+                        AND last_referenced_at IS NOT NULL
+                        AND last_referenced_at >= ?
+                           THEN 'online'
+                       WHEN device_id IS NOT NULL THEN 'offline'
+                       -- No device_id: aged out or never seen.
+                       WHEN last_referenced_at IS NULL THEN 'unregistered'
+                       WHEN last_referenced_at < ? THEN 'phantom'
+                       ELSE 'unregistered'
+                   END AS new_status
+              FROM nodes
+        """
         with self._tx() as conn:
+            transitions = [
+                (row["eui64"], row["old_status"], row["new_status"])
+                for row in conn.execute(
+                    calc_sql, (offline_cutoff, phantom_cutoff)
+                ).fetchall()
+                if (row["old_status"] or "") != (row["new_status"] or "")
+            ]
+            if transitions:
+                conn.executemany(
+                    "INSERT INTO events(ts, eui64, type, payload_json)"
+                    " VALUES (?, ?, 'status_change', ?)",
+                    [
+                        (
+                            now,
+                            eui64,
+                            json.dumps({"from": old, "to": new}),
+                        )
+                        for eui64, old, new in transitions
+                    ],
+                )
             cur = conn.execute(
-                """
+                f"""
                 UPDATE nodes
                    SET status_changed_at = CASE
                            WHEN status <> new_status THEN ?
                            ELSE status_changed_at
                        END,
                        status     = new_status
-                  FROM (
-                      SELECT eui64,
-                             CASE
-                                 -- Primary signal: HA entity availability.
-                                 WHEN available = 1 THEN 'online'
-                                 WHEN available = 0 AND device_id IS NOT NULL
-                                     THEN 'offline'
-                                 -- Availability not yet probed: fall back to
-                                 -- last_referenced recency for registered
-                                 -- nodes; otherwise treat as unregistered.
-                                 WHEN available IS NULL
-                                  AND device_id IS NOT NULL
-                                  AND last_referenced_at IS NOT NULL
-                                  AND last_referenced_at >= ?
-                                     THEN 'online'
-                                 WHEN device_id IS NOT NULL THEN 'offline'
-                                 -- No device_id: aged out or never seen.
-                                 WHEN last_referenced_at IS NULL THEN 'unregistered'
-                                 WHEN last_referenced_at < ? THEN 'phantom'
-                                 ELSE 'unregistered'
-                             END AS new_status
-                        FROM nodes
-                  ) AS calc
+                  FROM ({calc_sql}) AS calc
                  WHERE nodes.eui64 = calc.eui64
                 """,
                 (now, offline_cutoff, phantom_cutoff),
@@ -881,6 +910,7 @@ class SQLiteStore:
             "unregistered": counts.get("unregistered", 0),
             "phantom": counts.get("phantom", 0),
             "changed": changed,
+            "transitions": len(transitions),
         }
         return out
 
@@ -1217,6 +1247,66 @@ class SQLiteStore:
                 (_utc_now(), issue_id),
             )
             return cur.rowcount > 0
+
+    def get_node_flap_history(
+        self,
+        *,
+        eui64: str | None = None,
+        since: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        """Return ``status_change`` events plus per-EUI flap counts.
+
+        Backed by the ``events`` table populated by
+        ``recompute_node_statuses`` (since v0.9.41). Returns the most-recent
+        ``limit`` transitions (newest first) and an aggregate
+        ``flap_counts`` map ``{eui64: {total, by_transition}}`` covering
+        the same window.
+        """
+        limit = max(1, min(int(limit), 5000))
+        clauses = ["type = 'status_change'"]
+        params: list[Any] = []
+        if eui64:
+            clauses.append("eui64 = ?")
+            params.append(eui64)
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        where = " WHERE " + " AND ".join(clauses)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM events{where}"
+                f" ORDER BY ts DESC, id DESC LIMIT ?",
+                (*params, limit),
+            ).fetchall()
+        transitions: list[dict[str, Any]] = []
+        flap_counts: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            ev = _row_to_event(r)
+            payload = ev.get("payload") or {}
+            from_state = payload.get("from")
+            to_state = payload.get("to")
+            transitions.append(
+                {
+                    "id": ev.get("id"),
+                    "ts": ev.get("ts"),
+                    "eui64": ev.get("eui64"),
+                    "from": from_state,
+                    "to": to_state,
+                }
+            )
+            bucket = flap_counts.setdefault(
+                ev.get("eui64") or "",
+                {"total": 0, "by_transition": {}},
+            )
+            bucket["total"] += 1
+            key = f"{from_state}->{to_state}"
+            bucket["by_transition"][key] = bucket["by_transition"].get(key, 0) + 1
+        return {
+            "transitions": transitions,
+            "count": len(transitions),
+            "flap_counts": flap_counts,
+        }
 
     def list_active_issues(self) -> list[dict[str, Any]]:
         with self._lock:
