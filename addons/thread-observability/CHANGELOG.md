@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.25 — Router↔router mesh backbone visualized, peer names in table
+
+- **Graph tab** now distinguishes the three kinds of edges so router↔router peer links (the mesh backbone) are visually distinct from router→child attachments and multi-hop route-table entries:
+  - solid thick = router↔router peer (deduped — each pair is one line, no arrows)
+  - dashed thin = router→child (arrow toward child)
+  - dotted = route_table multi-hop entry
+  Routers are also rendered larger and the Leader gets a highlighted border so the mesh backbone pops at a glance.
+- **Thread Nodes table** now lists peer router names beneath each router / leader row ("peers: A, B, C"). Backend exposes `router_peers: [{eui64, name}]` on every node.
+- This is what answers “who is the Leader connected to in order to reach the OTBR / each other?” — the chain of router↔router edges in the Graph tab.
+
 ## 0.9.24 — LQI is Matter's 0–3 LinkQuality, color-coded
 
 - **Corrected LQI interpretation.** Matter's Thread Network Diagnostics cluster reports `LinkQuality` as a 4-bucket 0..3 value (the spec quantizes OpenThread's raw 0–255 LQI down to this band), not the 0–255 scale itself. Legend, column tooltip and color coding now reflect that: 3 green, 2 yellow, 1 red, 0 red.

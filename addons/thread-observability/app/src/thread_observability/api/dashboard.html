@@ -196,6 +196,12 @@
         <span><span class="sw" style="background:var(--warn)"></span>−70..−85</span>
         <span><span class="sw" style="background:var(--bad)"></span>&lt; −85</span>
       </div>
+      <div class="legend" style="margin-top:4px;">
+        <span><b>Edges:</b></span>
+        <span>━━━ thick solid = router↔router peer (mesh backbone)</span>
+        <span>┄┄┄ dashed = router→child (end device attached)</span>
+        <span>⋯⋯⋯ dotted = route-table entry (multi-hop)</span>
+      </div>
     </div>
   </section>
 
@@ -407,6 +413,8 @@ function renderNodesTable(nodes) {
     } else if (n.routing_role === 'leader') {
       // Leader is the root of its partition.
       if (partTag) roleHtml += '<span class="parent-hint">' + partTag + ' · ' + (n.router_peer_count || 0) + ' router peers</span>';
+      const peers = (n.router_peers || []).map(p => p.name || (p.eui64 || '').slice(-4).toUpperCase());
+      if (peers.length) roleHtml += '<span class="parent-hint">peers: ' + peers.join(', ') + '</span>';
     } else if (n.device_kind === 'router') {
       // Routers are peers in the mesh — show partition + peer count + leader.
       const bits = [];
@@ -414,6 +422,8 @@ function renderNodesTable(nodes) {
       bits.push((n.router_peer_count || 0) + ' peers');
       if (n.partition_leader_name && n.partition_leader_eui64 !== n.eui64) bits.push('leader: ' + n.partition_leader_name);
       roleHtml += '<span class="parent-hint">' + bits.join(' · ') + '</span>';
+      const peers = (n.router_peers || []).map(p => p.name || (p.eui64 || '').slice(-4).toUpperCase());
+      if (peers.length) roleHtml += '<span class="parent-hint">peers: ' + peers.join(', ') + '</span>';
     }
     roleCell.innerHTML = roleHtml;
     const rssiCell = el('td', {class: rssiClass(rssi)}, rssi == null ? '—' : (rssi + ' dBm'));
@@ -476,20 +486,42 @@ async function renderGraph() {
   }
 
   const elements = [];
+  const nodeKind = {};
   for (const n of (topo.nodes || [])) {
+    const k = (n.routing_role === 'leader') ? 'leader'
+            : (['router','reed','end_device','sleepy_end_device'].includes(n.routing_role) ? n.routing_role
+            : 'unknown');
+    nodeKind[n.eui64] = k;
+    const isRouter = (n.routing_role === 'leader' || n.routing_role === 'router' || n.routing_role === 'reed');
     elements.push({ data: {
       id: n.eui64,
-      label: (n.display_name || n.friendly_name || (n.eui64 || '').slice(-4).toUpperCase()),
-      color: roleColorForGraph(n),
+      label: (n.friendly_name || (n.eui64 || '').slice(-4).toUpperCase()),
+      color: roleColorForGraph({ routing_role: n.routing_role, device_kind: (isRouter ? 'router' : (n.routing_role === 'sleepy_end_device' ? 'sed' : 'fed')), is_phantom: n.is_phantom }),
+      kind: k,
+      size: isRouter ? 36 : 18,
     }});
   }
+  // Dedupe edges so a router-router pair reported by both ends becomes one line.
+  const seen = new Set();
   for (const l of (topo.links || [])) {
     if (!l.from || !l.to) continue;
+    const isChild = !!l.is_child;
+    // Symmetric key for router-router pairs (both ends are routers and not a child link)
+    const aRouter = ['leader','router','reed'].includes(nodeKind[l.from]);
+    const bRouter = ['leader','router','reed'].includes(nodeKind[l.to]);
+    const peer = aRouter && bRouter && !isChild;
+    const key = peer
+      ? 'peer:' + [l.from, l.to].sort().join('|')
+      : 'edge:' + l.from + '->' + l.to + '#' + (l.source || '') + (isChild ? ':child' : '');
+    if (seen.has(key)) continue;
+    seen.add(key);
     elements.push({ data: {
-      id: l.from + '->' + l.to + '#' + (l.source || ''),
+      id: key,
       source: l.from,
       target: l.to,
       color: rssiEdgeColor(l.rssi_avg != null ? l.rssi_avg : l.rssi),
+      edge_class: peer ? 'peer' : (isChild ? 'child' : (l.source === 'route_table' ? 'route' : 'other')),
+      label: (l.rssi_avg != null ? (l.rssi_avg + ' dBm') : ''),
     }});
   }
 
@@ -503,15 +535,41 @@ async function renderGraph() {
         'label': 'data(label)',
         'color': '#e5e7eb', 'font-size': 10,
         'text-valign': 'bottom', 'text-margin-y': 6,
-        'width': 24, 'height': 24, 'border-width': 1, 'border-color': '#0b1220',
+        'width': 'data(size)', 'height': 'data(size)',
+        'border-width': 1, 'border-color': '#0b1220',
       }},
-      { selector: 'edge', style: {
-        'line-color': 'data(color)', 'width': 2,
-        'curve-style': 'bezier', 'opacity': 0.75,
+      { selector: 'node[kind = "leader"]', style: {
+        'border-width': 3, 'border-color': '#fca5a5',
+        'font-weight': 'bold',
+      }},
+      // Router-router peer edges: solid, thick, no arrows (symmetric peer link)
+      { selector: 'edge[edge_class = "peer"]', style: {
+        'line-color': 'data(color)', 'width': 4,
+        'curve-style': 'bezier', 'opacity': 0.95,
+        'target-arrow-shape': 'none',
+      }},
+      // Router-child edges: thin, dashed, arrow toward child
+      { selector: 'edge[edge_class = "child"]', style: {
+        'line-color': 'data(color)', 'width': 1.5,
+        'curve-style': 'bezier', 'opacity': 0.7,
+        'line-style': 'dashed',
+        'target-arrow-shape': 'triangle', 'target-arrow-color': 'data(color)',
+      }},
+      // Multi-hop route-table entries: dotted
+      { selector: 'edge[edge_class = "route"]', style: {
+        'line-color': 'data(color)', 'width': 1,
+        'curve-style': 'bezier', 'opacity': 0.4,
+        'line-style': 'dotted',
+        'target-arrow-shape': 'vee', 'target-arrow-color': 'data(color)',
+      }},
+      // Fallback
+      { selector: 'edge[edge_class = "other"]', style: {
+        'line-color': 'data(color)', 'width': 1.5,
+        'curve-style': 'bezier', 'opacity': 0.6,
         'target-arrow-shape': 'triangle', 'target-arrow-color': 'data(color)',
       }},
     ],
-    layout: { name: 'cose', animate: false, idealEdgeLength: 90, nodeRepulsion: 6000 },
+    layout: { name: 'cose', animate: false, idealEdgeLength: 110, nodeRepulsion: 9000, gravity: 0.4 },
     wheelSensitivity: 0.2,
   });
 }

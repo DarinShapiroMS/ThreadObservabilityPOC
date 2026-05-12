@@ -175,6 +175,29 @@ def _build_router_peer_counts(s: SQLiteStore) -> dict[str, int]:
     return {r["reporter_eui64"]: int(r["n"]) for r in rows if r["reporter_eui64"]}
 
 
+def _build_router_peers(s: SQLiteStore) -> dict[str, list[str]]:
+    """Return each reporter's distinct router peer EUIs (is_child=0).
+
+    Returns ``{reporter_eui: [peer_eui, ...]}``, sorted by peer EUI for
+    determinism.
+    """
+    with s._lock:  # noqa: SLF001
+        rows = s._conn.execute(  # noqa: SLF001
+            "SELECT DISTINCT reporter_eui64, neighbor_eui64 FROM links"
+            " WHERE source = 'neighbor_table'"
+            "   AND (is_child = 0 OR is_child IS NULL)"
+            "   AND neighbor_eui64 IS NOT NULL"
+            " ORDER BY reporter_eui64, neighbor_eui64"
+        ).fetchall()
+    out: dict[str, list[str]] = {}
+    for r in rows:
+        rep = r["reporter_eui64"]
+        nei = r["neighbor_eui64"]
+        if rep and nei:
+            out.setdefault(rep, []).append(nei)
+    return out
+
+
 def list_nodes_enriched(
     store: SQLiteStore | None = None,
     include_signal_strength: bool = False,
@@ -187,6 +210,7 @@ def list_nodes_enriched(
     nodes = s.list_nodes()
     parent_map = _build_parent_map(s)
     peer_counts = _build_router_peer_counts(s)
+    peer_map = _build_router_peers(s)
     name_by_eui = {n["eui64"]: (n.get("friendly_name") or get_node_display_name(n))
                    for n in nodes if n.get("eui64")}
     # Map partition_id -> leader EUI by scanning nodes for routing_role == 'leader'
@@ -221,6 +245,10 @@ def list_nodes_enriched(
             "partition_leader_eui64": leader_eui,
             "partition_leader_name": name_by_eui.get(leader_eui) if leader_eui else None,
             "router_peer_count": peer_counts.get(eui, 0) if eui else 0,
+            "router_peers": [
+                {"eui64": p, "name": name_by_eui.get(p)}
+                for p in (peer_map.get(eui) or [])
+            ] if eui else [],
             "parent_eui64": parent_eui,
             "parent_name": name_by_eui.get(parent_eui) if parent_eui else None,
         }
