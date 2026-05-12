@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.35 — Scenario fixtures + pipeline integration + property tests
+
+- **Scenario fixtures** (`tests/scenarios/`). JSON-driven mesh shapes drive a parametrized test matrix. Five shipped: single OTBR with three routers, two-partition network split, stale phantom singleton, REED attached as child, and cold-start empty. Adding a new mesh quirk is now a new JSON file, not new Python.
+- **Pipeline integration tests** (`tests/integration/test_pipeline_tick.py`, 7 tests). Stage stubs replace the I/O-touching pipeline stages; the tests assert per-stage failure isolation, tick-count accounting, runner-state hygiene, and that downstream stages still run when an upstream one raises.
+- **Property-based route walker tests** (`tests/integration/test_routing_property.py`, 5 tests, hypothesis). Random partitions of 2–8 routers with arbitrary next-hop pointers verify the walker: always terminates, returns acyclic chains, starts at the requested source, and ``complete=True`` iff the final hop is the OTBR.
+- **Test count: 146** (up from 114; 145 pass, 1 deliberately skipped). `hypothesis>=6.0` added to test extras.
+- No runtime behaviour change. Pure test infrastructure: build confidence is now strong enough that an API or routing regression is caught at PR time, not in the field.
+
 ## 0.9.34 — API contract tests + Pydantic response schemas
 
 - **Pydantic response contracts** (`api/schemas.py`). Every public `/v1/...` endpoint now has a declared response model: `HealthResponse`, `TopologyResponse`, `RouteWalkResponse`, `NeighborsResponse`, `PartitionsResponse`, `IssuesResponse`, `PhantomsResponse`, `DevStatusResponse`, plus their nested row models. Models use `extra="allow"` so adding fields server-side is non-breaking, but required-field types are now enforced by tests.

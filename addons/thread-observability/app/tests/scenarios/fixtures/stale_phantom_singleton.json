@@ -1,0 +1,30 @@
+{
+  "name": "stale_phantom_singleton",
+  "description": "An EUI that hasn't been referenced in a long time (recommissioned device) carries a stale partition_id. The partitions view should NOT show a network split — phantom-only singleton partitions are dropped when include_phantoms=false (the default).",
+  "nodes": [
+    {
+      "eui64": "aaaaaaaaaaaaaaaa",
+      "friendly_name": "OTBR",
+      "role": "border_router",
+      "device_id": "otbr",
+      "diagnostics": {"partition_id": 5000, "routing_role": "leader", "active_routers": 1},
+      "router_id": 1
+    },
+    {
+      "eui64": "eeeeeeeeeeeeeeee",
+      "friendly_name": "Stale Sensor",
+      "role": "end_device",
+      "diagnostics": {"partition_id": 9999},
+      "phantom": true
+    }
+  ],
+  "links": [],
+  "expectations": {
+    "topology": {"node_count": 1, "link_count": 0},
+    "partitions": {"partition_count": 1, "split": false},
+    "dev_status": {
+      "otbr_eui64": "aaaaaaaaaaaaaaaa",
+      "partition_summary": "single partition"
+    }
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "name": "single_otbr_three_routers",
+  "description": "Baseline: HA Yellow OTBR + two downstream routers in one partition. Router C reaches the OTBR through Router B.",
+  "nodes": [
+    {
+      "eui64": "aaaaaaaaaaaaaaaa",
+      "friendly_name": "HA Yellow OTBR",
+      "role": "border_router",
+      "device_id": "ha-yellow-001",
+      "diagnostics": {"partition_id": 2882400001, "routing_role": "leader", "leader_router_id": 1, "active_routers": 3},
+      "router_id": 1
+    },
+    {
+      "eui64": "bbbbbbbbbbbbbbbb",
+      "friendly_name": "Router B",
+      "role": "router",
+      "device_id": "router-b",
+      "diagnostics": {"partition_id": 2882400001, "routing_role": "router", "leader_router_id": 1, "active_routers": 3},
+      "router_id": 5
+    },
+    {
+      "eui64": "cccccccccccccccc",
+      "friendly_name": "Router C",
+      "role": "router",
+      "device_id": "router-c",
+      "diagnostics": {"partition_id": 2882400001, "routing_role": "router", "leader_router_id": 1, "active_routers": 3},
+      "router_id": 12
+    }
+  ],
+  "links": [
+    {
+      "reporter": "bbbbbbbbbbbbbbbb",
+      "source": "route_table",
+      "partition_id": 2882400001,
+      "rows": [
+        {"neighbor_eui64": "aaaaaaaaaaaaaaaa", "path_cost": 1, "next_hop_router_id": 1, "router_id": 1, "link_established": true},
+        {"neighbor_eui64": "cccccccccccccccc", "path_cost": 1, "next_hop_router_id": 12, "router_id": 12, "link_established": true}
+      ]
+    },
+    {
+      "reporter": "cccccccccccccccc",
+      "source": "route_table",
+      "partition_id": 2882400001,
+      "rows": [
+        {"neighbor_eui64": "aaaaaaaaaaaaaaaa", "path_cost": 2, "next_hop_router_id": 5, "router_id": 1, "link_established": false},
+        {"neighbor_eui64": "bbbbbbbbbbbbbbbb", "path_cost": 1, "next_hop_router_id": 5, "router_id": 5, "link_established": true}
+      ]
+    },
+    {
+      "reporter": "bbbbbbbbbbbbbbbb",
+      "source": "neighbor_table",
+      "partition_id": 2882400001,
+      "rows": [
+        {"neighbor_eui64": "aaaaaaaaaaaaaaaa", "rssi_avg": -55, "lqi_in": 240, "is_child": false, "rx_on_when_idle": true, "full_thread_device": true},
+        {"neighbor_eui64": "cccccccccccccccc", "rssi_avg": -70, "lqi_in": 180, "is_child": false, "rx_on_when_idle": true, "full_thread_device": true}
+      ]
+    }
+  ],
+  "expectations": {
+    "topology": {"node_count": 3, "split": false},
+    "partitions": {"partition_count": 1, "split": false},
+    "routes": [
+      {"source": "bbbbbbbbbbbbbbbb", "complete": true, "hop_count": 2},
+      {"source": "cccccccccccccccc", "complete": true, "hop_count": 3},
+      {"source": "aaaaaaaaaaaaaaaa", "complete": true, "hop_count": 1, "issue_codes": ["self_is_otbr"]}
+    ],
+    "dev_status": {
+      "otbr_eui64": "aaaaaaaaaaaaaaaa",
+      "partition_summary": "single partition"
+    }
+  }
+}

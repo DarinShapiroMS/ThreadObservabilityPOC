@@ -1,0 +1,17 @@
+{
+  "name": "cold_start_empty",
+  "description": "Pipeline has not run yet (or DB was wiped on boot). Every endpoint must return a valid empty response — no consumer should crash.",
+  "nodes": [],
+  "links": [],
+  "expectations": {
+    "topology": {"node_count": 0, "link_count": 0, "split": false},
+    "partitions": {"partition_count": 0, "split": false},
+    "routes": [
+      {"source": "aaaaaaaaaaaaaaaa", "complete": false, "issue_codes": ["no_otbr"]}
+    ],
+    "dev_status": {
+      "otbr_eui64": null,
+      "partition_summary": "no partitions discovered"
+    }
+  }
+}

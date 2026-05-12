@@ -1,0 +1,42 @@
+{
+  "name": "reed_promotion_candidate",
+  "description": "A REED (Router-Eligible End Device) currently attached as a child, with no router_id assigned, will not appear in the routing fabric. Topology shows it as a child edge, partition count unaffected.",
+  "nodes": [
+    {
+      "eui64": "aaaaaaaaaaaaaaaa",
+      "friendly_name": "OTBR",
+      "role": "border_router",
+      "device_id": "otbr",
+      "diagnostics": {"partition_id": 7777, "routing_role": "leader", "active_routers": 1},
+      "router_id": 1
+    },
+    {
+      "eui64": "ffffffffffffffff",
+      "friendly_name": "Sensor F (REED)",
+      "role": "end_device",
+      "device_id": "sensor-f",
+      "diagnostics": {"partition_id": 7777, "routing_role": "child"}
+    }
+  ],
+  "links": [
+    {
+      "reporter": "aaaaaaaaaaaaaaaa",
+      "source": "neighbor_table",
+      "partition_id": 7777,
+      "rows": [
+        {"neighbor_eui64": "ffffffffffffffff", "rssi_avg": -60, "lqi_in": 200, "is_child": true, "rx_on_when_idle": false, "full_thread_device": false}
+      ]
+    }
+  ],
+  "expectations": {
+    "topology": {"node_count": 2},
+    "partitions": {"partition_count": 1, "split": false},
+    "routes": [
+      {"source": "ffffffffffffffff", "complete": false, "issue_codes": ["no_route_to_otbr"]}
+    ],
+    "dev_status": {
+      "otbr_eui64": "aaaaaaaaaaaaaaaa",
+      "partition_summary": "single partition"
+    }
+  }
+}

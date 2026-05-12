@@ -1,0 +1,52 @@
+{
+  "name": "network_split_two_partitions",
+  "description": "Two partitions: the OTBR's main partition and an orphaned router that formed its own partition. /v1/partitions must report split=true. Routes from the orphan must fail with 'different_partition'.",
+  "nodes": [
+    {
+      "eui64": "aaaaaaaaaaaaaaaa",
+      "friendly_name": "OTBR",
+      "role": "border_router",
+      "device_id": "otbr",
+      "diagnostics": {"partition_id": 1000, "routing_role": "leader", "active_routers": 2},
+      "router_id": 1
+    },
+    {
+      "eui64": "bbbbbbbbbbbbbbbb",
+      "friendly_name": "Router B",
+      "role": "router",
+      "device_id": "router-b",
+      "diagnostics": {"partition_id": 1000, "routing_role": "router", "active_routers": 2},
+      "router_id": 7
+    },
+    {
+      "eui64": "dddddddddddddddd",
+      "friendly_name": "Orphan Router D",
+      "role": "router",
+      "device_id": "router-d",
+      "diagnostics": {"partition_id": 2000, "routing_role": "leader", "active_routers": 1},
+      "router_id": 1
+    }
+  ],
+  "links": [
+    {
+      "reporter": "bbbbbbbbbbbbbbbb",
+      "source": "route_table",
+      "partition_id": 1000,
+      "rows": [
+        {"neighbor_eui64": "aaaaaaaaaaaaaaaa", "path_cost": 1, "next_hop_router_id": 1, "router_id": 1, "link_established": true}
+      ]
+    }
+  ],
+  "expectations": {
+    "topology": {"node_count": 3},
+    "partitions": {"partition_count": 2, "split": true},
+    "routes": [
+      {"source": "bbbbbbbbbbbbbbbb", "complete": true, "hop_count": 2},
+      {"source": "dddddddddddddddd", "complete": false, "issue_codes": ["different_partition"]}
+    ],
+    "dev_status": {
+      "otbr_eui64": "aaaaaaaaaaaaaaaa",
+      "partition_summary": "network is split across 2 partitions"
+    }
+  }
+}
