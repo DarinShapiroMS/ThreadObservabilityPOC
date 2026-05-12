@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.24 — LQI is Matter's 0–3 LinkQuality, color-coded
+
+- **Corrected LQI interpretation.** Matter's Thread Network Diagnostics cluster reports `LinkQuality` as a 4-bucket 0..3 value (the spec quantizes OpenThread's raw 0–255 LQI down to this band), not the 0–255 scale itself. Legend, column tooltip and color coding now reflect that: 3 green, 2 yellow, 1 red, 0 red.
+
 ## 0.9.23 — Role column shows partition / peers / parent for every node, LQI legend
 
 - **Role column is now meaningful for routers too.** Thread routers are peers in a mesh, not children of a parent — so the dashboard now shows partition id, peer count and (for non-leaders) the partition leader instead of leaving the caption blank. Sleepy/end devices keep the `via <router>` caption.

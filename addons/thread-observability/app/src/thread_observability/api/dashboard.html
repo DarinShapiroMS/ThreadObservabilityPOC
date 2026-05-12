@@ -55,6 +55,9 @@
   .rssi-good { color: var(--good); font-weight: 700; }
   .rssi-warn { color: var(--warn); font-weight: 700; }
   .rssi-bad  { color: var(--bad);  font-weight: 700; }
+  .lqi-good  { color: var(--good); font-weight: 700; }
+  .lqi-warn  { color: var(--warn); font-weight: 700; }
+  .lqi-bad   { color: var(--bad);  font-weight: 700; }
 
   .role-leader { background:#450a0a; color:#fca5a5; }
   .role-router { background:#172554; color:#93c5fd; }
@@ -141,7 +144,7 @@
               <th>Name</th>
               <th>Role</th>
               <th title="Received Signal Strength Indicator — higher (less negative) dBm is stronger">RSSI</th>
-              <th title="Link Quality Indicator — neighbor router's estimate of receive quality from this node, 0–255 higher = better">LQI</th>
+              <th title="Matter LinkQuality — 0..3 quantized: 3 good, 2 fair, 1 poor, 0 no link">LQI</th>
               <th>Status</th>
               <th>Last seen</th>
               <th>EUI64</th>
@@ -157,9 +160,13 @@
         <span><span class="sw" style="background:var(--bad)"></span>&lt; −85 (poor)</span>
       </div>
       <div class="legend" style="margin-top:4px;">
-        <span><b>LQI</b> (link quality indicator, 0–255 — higher = better):
-        the router's estimate of how reliably it decodes packets from this
-        neighbor. ≥ 200 is excellent, 100–200 is workable, &lt; 100 is degraded.</span>
+        <span><b>LQI</b> (Matter LinkQuality, 0–3 quantized — the neighbor
+        router's estimate of how reliably it decodes packets from this node):
+        <span class="lqi-good">3</span> good ·
+        <span class="lqi-warn">2</span> fair ·
+        <span class="lqi-bad">1</span> poor ·
+        <span class="lqi-bad">0</span> no link. Matter quantizes OpenThread's
+        0–255 LQI down to this 4-bucket value.</span>
       </div>
       <div class="legend" style="margin-top:4px;">
         <span><b>Role:</b> Leader = partition root; Router/REED = mesh peer
@@ -271,6 +278,13 @@ function rssiClass(dbm) {
   if (dbm >= -70) return 'rssi-good';
   if (dbm >= -85) return 'rssi-warn';
   return 'rssi-bad';
+}
+function lqiClass(v) {
+  // Matter Thread Network Diagnostics LinkQuality is a 0..3 quantized value.
+  if (v == null) return '';
+  if (v >= 3) return 'lqi-good';
+  if (v >= 2) return 'lqi-warn';
+  return 'lqi-bad';
 }
 function roleBadge(node) {
   const k = node.device_kind || 'unknown';
@@ -403,7 +417,7 @@ function renderNodesTable(nodes) {
     }
     roleCell.innerHTML = roleHtml;
     const rssiCell = el('td', {class: rssiClass(rssi)}, rssi == null ? '—' : (rssi + ' dBm'));
-    const lqiCell = el('td', {}, lqi == null ? '—' : String(lqi));
+    const lqiCell = el('td', {class: lqiClass(lqi)}, lqi == null ? '—' : String(lqi));
     const statusCls = n.status === 'online' ? 'good' : (n.status === 'offline' ? 'bad' : 'muted');
     const statusCell = el('td', {html: '<span class="pill ' + statusCls + '">' + (n.status || '—') + '</span>'});
     const seenCell = el('td', {}, fmtAge(n.last_seen));
