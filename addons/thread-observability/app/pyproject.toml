@@ -27,6 +27,7 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 "thread_observability.api" = ["dashboard.html"]
+"thread_observability.pipeline" = ["playbooks.json"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

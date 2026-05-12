@@ -22,12 +22,11 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-# Resolved at import time; the loader walks up from this file to find the
-# packaged playbooks/ directory so tests and the running addon agree on
-# the same corpus.
+# Resolved at import time. The corpus JSON is shipped as package data next
+# to this module so it works equally under editable installs (dev/tests)
+# and under a regular ``pip install`` inside the addon container.
 _THIS_DIR = Path(__file__).resolve().parent
-# pipeline/ -> thread_observability/ -> src/ -> app/ ; playbooks/ lives at app/.
-_DEFAULT_CORPUS = _THIS_DIR.parent.parent.parent / "playbooks" / "playbooks.json"
+_DEFAULT_CORPUS = _THIS_DIR / "playbooks.json"
 
 _cache: dict[str, Any] = {}
 

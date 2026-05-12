@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.44 — Bundle playbook corpus as package data
+
+Hotfix for 0.9.43. The playbook corpus loader resolved `_DEFAULT_CORPUS` by walking three directories up from `pipeline/playbooks.py`, which works for editable installs in dev but resolves to `/usr/lib/python3.12/playbooks/playbooks.json` after `pip install` inside the addon container — a path that doesn't exist. `analyze_node` and `lookup_playbook` therefore returned `{"error": "[Errno 2] No such file or directory: ..."}` in production.
+
+- **`app/playbooks/playbooks.json` → `app/src/thread_observability/pipeline/playbooks.json`.** The corpus now lives next to the module that loads it.
+- **`pyproject.toml`** declares `"thread_observability.pipeline" = ["playbooks.json"]` under `[tool.setuptools.package-data]` so `pip install` ships it alongside the `.py` files.
+- **`pipeline/playbooks.py`** resolves `_DEFAULT_CORPUS = Path(__file__).resolve().parent / "playbooks.json"`, which is correct under both editable and regular installs.
+
+No schema change. No test changes — the existing test suite (203 passed, 1 skipped) covers both code paths because the path resolution is identical for editable and installed packages once the file is co-located.
+
 ## 0.9.43 — Consultant tier: timeline, topology snapshots, playbook corpus, analyze_node + observer-events suppression
 
 Ships three intertwined layers in one release because they all feed the same end goal: turning the addon into a problem-solving consultant rather than a passive observer. **Tier 2** ("observer events") records when the *addon itself* lost ground-truth signal — OTBR/Matter polls failing, Supervisor unreachable, the addon restarting — so downstream reasoning can distinguish "device went offline" from "we stopped watching". **Tier 3** ("suppression") teaches the reasoner to demote `offline_node` issues whose trigger window overlaps a known observer outage, so a Supervisor hiccup no longer manifests as 40 false critical alerts. **Tier 4** ("consultant") layers four new analysis surfaces on top: a unified `query_timeline` that merges events + issues + observer outages on one axis, periodic deduplicated `topology_snapshots` with a structural `diff_topology`, a 15-entry remediation `playbooks` corpus addressable by failure-kind, and an `analyze_node` bundled tool that composes all of the above into a single payload an LLM consultant can reason over.
