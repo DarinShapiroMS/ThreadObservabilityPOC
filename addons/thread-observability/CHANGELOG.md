@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.55 — Redact `ha_admin_token` in `get_config` response
+
+Security fix. `get_config` was returning `ha_admin_token` in plaintext,
+which leaks the admin LLT to any caller of the unauthenticated MCP port.
+Now redacted to `"***"` alongside the existing `influx.token` redaction.
+
+Found while verifying 0.9.54 envelope was live on device — the wrapped
+response made the leak obvious.
+
 ## 0.9.54 — Phase 1: temporal-honesty envelope on read tools
 
 Read-only MCP tools now return `{"data": ..., "meta": {...}}` so callers

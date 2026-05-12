@@ -85,6 +85,26 @@ def test_all_documented_read_tools_in_registry() -> None:
     assert not missing, f"Read tools not registered: {sorted(missing)}"
 
 
+def test_get_config_redacts_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ha_admin_token and influx.token must never appear in plaintext."""
+    from thread_observability import config as cfg_mod
+
+    fake = cfg_mod.ThreadObsConfig(
+        ha_admin_token="SECRET-LLT-XYZ",
+        influx=cfg_mod.InfluxConfig(token="SECRET-INFLUX-TOKEN"),
+    )
+    monkeypatch.setattr(mcp_tools, "get_config", lambda: fake)
+
+    out = asyncio.run(mcp_tools._dispatch_tool("get_config", {}))
+    assert out["ha_admin_token"] == "***"
+    assert out["influx"]["token"] == "***"
+    # Confirm no plaintext leak anywhere in the dumped payload
+    import json as _json
+    blob = _json.dumps(out)
+    assert "SECRET-LLT-XYZ" not in blob
+    assert "SECRET-INFLUX-TOKEN" not in blob
+
+
 def test_pipeline_tick_persistence(store) -> None:  # type: ignore[no-untyped-def]
     rowid = store.record_pipeline_tick({
         "started_at": 1_700_000_000.0,

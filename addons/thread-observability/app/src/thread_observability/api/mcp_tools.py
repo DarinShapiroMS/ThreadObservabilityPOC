@@ -1171,8 +1171,11 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
     if name == "get_config":
         try:
             cfg = get_config()
-            # Avoid leaking the influx token in MCP output.
+            # Redact every secret-bearing field before returning. The MCP
+            # port has no auth, so a leaked token here = a leaked token.
             payload = cfg.model_dump()
+            if payload.get("ha_admin_token"):
+                payload["ha_admin_token"] = "***"
             if payload.get("influx", {}).get("token"):
                 payload["influx"]["token"] = "***"
             return payload
