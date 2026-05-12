@@ -8,9 +8,9 @@ from thread_observability.storage.sqlite_store import SQLiteStore
 
 
 def test_migrations_apply(store: SQLiteStore) -> None:
-    assert store.schema_version == 11
+    assert store.schema_version == 12
     stats = store.stats()
-    assert stats["schema_version"] == 11
+    assert stats["schema_version"] == 12
     assert stats["row_counts"]["events"] == 0
 
 
@@ -136,35 +136,14 @@ def test_bump_last_referenced_skips_unknown_and_touches_known(
     node = store.get_node(known)
     assert node is not None
     assert node["last_referenced_at"] is not None
-    assert node["is_phantom"] == 0
 
 
 def test_sweep_phantoms_marks_old_and_clears_fresh(store: SQLiteStore) -> None:
-    old_eui = "cc" * 8
-    fresh_eui = "dd" * 8
-    # Registry-first (v9): pre-seed both as mesh-only nodes (no device_id)
-    # so ``bump_last_referenced`` can touch them and phantom-sweep logic
-    # applies. In production these rows would be created by the HA
-    # registry sync; for legacy phantom-sweep semantics we seed bare rows.
-    store.upsert_node_metadata(eui64=old_eui)
-    store.upsert_node_metadata(eui64=fresh_eui)
-    store.bump_last_referenced([old_eui, fresh_eui])
-    # Backdate one row to look stale.
-    stale_ts = (datetime.now(tz=UTC) - timedelta(hours=48)).isoformat()
-    with store._tx() as conn:  # noqa: SLF001
-        conn.execute(
-            "UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?",
-            (stale_ts, old_eui),
-        )
-    result = store.sweep_phantoms(threshold_seconds=24 * 3600)
-    assert result["marked"] >= 1
-    assert {n["eui64"] for n in store.list_phantom_nodes()} == {old_eui}
-
-    # Bump the stale one back; it should clear.
-    store.bump_last_referenced([old_eui])
-    result2 = store.sweep_phantoms(threshold_seconds=24 * 3600)
-    assert result2["cleared"] >= 1
-    assert store.list_phantom_nodes() == []
+    """Removed in v0.9.40: ``sweep_phantoms`` retired with the
+    ``is_phantom`` column. ``recompute_node_statuses`` covers the same
+    transition (see ``test_recompute_node_statuses_state_machine``).
+    """
+    return
 
 
 def test_purge_phantom_nodes_removes_links(store: SQLiteStore) -> None:
@@ -176,11 +155,11 @@ def test_purge_phantom_nodes_removes_links(store: SQLiteStore) -> None:
     store.replace_links_for_reporter(A, "neighbor_table", [
         {"neighbor_eui64": B, "rssi_avg": -55, "is_child": True},
     ])
-    # Mark A as phantom via stale ts.
+    # Mark A as phantom via stale ts + recompute.
     stale = (datetime.now(tz=UTC) - timedelta(hours=48)).isoformat()
     with store._tx() as conn:  # noqa: SLF001
         conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?", (stale, A))
-    store.sweep_phantoms(threshold_seconds=24 * 3600)
+    store.recompute_node_statuses(offline_seconds=900, phantom_seconds=24 * 3600)
     result = store.purge_phantom_nodes()
     assert result["deleted_nodes"] >= 1
     assert result["deleted_links"] >= 1
@@ -210,7 +189,7 @@ def test_reset_data_wipes_cache_tables_preserves_schema(store: SQLiteStore) -> N
     assert counts["events"] == 0
     assert counts["issues"] == 0
     # Schema migrations still recorded.
-    assert store.schema_version == 11
+    assert store.schema_version == 12
 
 
 def test_upsert_node_metadata_persists_ha_fields(store: SQLiteStore) -> None:
@@ -310,9 +289,6 @@ def test_recompute_node_statuses_state_machine(store: SQLiteStore) -> None:
     assert store.get_node(registered_old)["status"] == "offline"  # protected
     assert store.get_node(unreg)["status"] == "unregistered"
     assert store.get_node(dead)["status"] == "phantom"
-    # is_phantom mirrors status=='phantom' for backwards compat.
-    assert store.get_node(dead)["is_phantom"] == 1
-    assert store.get_node(stale)["is_phantom"] == 0
 
 
 def test_apply_availability_updates_columns(store: SQLiteStore) -> None:

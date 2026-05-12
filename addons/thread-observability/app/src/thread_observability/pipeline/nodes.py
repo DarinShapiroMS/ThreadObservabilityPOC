@@ -332,9 +332,7 @@ def list_nodes_enriched(
     next_hop_map = _build_next_hop_to_otbr(s, nodes)
     out: list[dict[str, Any]] = []
     for node in nodes:
-        if not include_phantoms and (
-            node.get("status") == "phantom" or node.get("is_phantom")
-        ):
+        if not include_phantoms and node.get("status") == "phantom":
             continue
         eui = node.get("eui64")
         routing_role = node.get("routing_role")
@@ -361,7 +359,6 @@ def list_nodes_enriched(
             "last_seen": node.get("last_seen"),
             "status": node.get("status") or infer_node_status(node),
             "status_changed_at": node.get("status_changed_at"),
-            "is_phantom": bool(node.get("is_phantom")) or node.get("status") == "phantom",
             "last_referenced_at": node.get("last_referenced_at"),
             "available": (
                 None if node.get("available") is None

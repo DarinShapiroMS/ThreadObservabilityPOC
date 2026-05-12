@@ -80,7 +80,7 @@ def build_topology(
     now = datetime.now(tz=UTC)
     cutoff = (now - timedelta(minutes=freshness_minutes)).isoformat()
 
-    phantom_filter = "" if include_phantoms else " WHERE n.is_phantom = 0"
+    phantom_filter = "" if include_phantoms else " WHERE n.status <> 'phantom'"
 
     with s._lock:  # noqa: SLF001 - intentional: same package
         rows = s._conn.execute(  # noqa: SLF001
@@ -93,7 +93,7 @@ def build_topology(
               n.partition_id,
               n.leader_router_id,
               n.last_seen,
-              n.is_phantom,
+              n.status,
               n.last_referenced_at,
               (SELECT e.parent_eui64
                  FROM events e
@@ -173,7 +173,8 @@ def build_topology(
                 "last_rssi": d.get("last_rssi"),
                 "last_lqi": d.get("last_lqi"),
                 "stale": stale,
-                "is_phantom": bool(d.get("is_phantom")),
+                "is_phantom": d.get("status") == "phantom",
+                "status": d.get("status"),
                 "last_referenced_at": d.get("last_referenced_at"),
             }
         )

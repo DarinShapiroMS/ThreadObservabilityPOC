@@ -336,7 +336,7 @@ function renderNextHop(node) {
   return '<span class="parent-hint">→ OTBR via ' + target + cost + '</span>';
 }
 function roleColorForGraph(node) {
-  if (node.is_phantom) return '#475569';
+  if (node.status === 'phantom') return '#475569';
   if (node.routing_role === 'leader') return '#dc2626';
   switch (node.device_kind) {
     case 'router': return '#3b82f6';
@@ -427,14 +427,14 @@ function renderNodesTable(nodes) {
   // Do not re-sort — that's data shaping, which belongs on the server so
   // MCP / AI consumers get the same order.
   for (const n of nodes) {
-    if (n.is_phantom && !showPhantoms) continue;
+    if (n.status === 'phantom' && !showPhantoms) continue;
     const sig = n.signal_strength || {};
     const rssi = sig.rssi;
     const lqi  = sig.lqi;
     const tr = el('tr');
     const nameMain =
       (n.display_name || '<span class="muted">unnamed</span>') +
-      (n.is_phantom ? ' <span class="pill warn">phantom</span>' : '');
+      (n.status === 'phantom' ? ' <span class="pill warn">phantom</span>' : '');
     // Sub-line surfaces HA registry metadata: manufacturer · model · sw v…
     const metaBits = [];
     if (n.manufacturer) metaBits.push(escapeHtml(n.manufacturer));
@@ -564,7 +564,7 @@ async function renderGraph() {
     elements.push({ data: {
       id: n.eui64,
       label: (n.friendly_name || (n.eui64 || '').slice(-4).toUpperCase()),
-      color: roleColorForGraph({ routing_role: n.routing_role, device_kind: (isRouter ? 'router' : (n.routing_role === 'sleepy_end_device' ? 'sed' : 'fed')), is_phantom: n.is_phantom }),
+      color: roleColorForGraph({ routing_role: n.routing_role, device_kind: (isRouter ? 'router' : (n.routing_role === 'sleepy_end_device' ? 'sed' : 'fed')), is_phantom: (n.status === 'phantom') }),
       kind: k,
       size: isRouter ? 36 : 18,
     }});

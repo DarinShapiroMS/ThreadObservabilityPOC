@@ -51,7 +51,7 @@ def test_dev_status_all_nodes_sort_order(client, store) -> None:
     non_phantom_names = [
         n.get("display_name", "").lower()
         for n in body.all_nodes
-        if not (n.get("status") == "phantom" or n.get("is_phantom"))
+        if n.get("status") != "phantom"
     ]
     assert non_phantom_names == sorted(non_phantom_names)
 

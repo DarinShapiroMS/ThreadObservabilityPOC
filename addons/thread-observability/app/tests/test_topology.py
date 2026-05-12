@@ -177,7 +177,7 @@ def test_topology_hides_phantoms_by_default(store: SQLiteStore) -> None:
     stale = (datetime.now(tz=UTC) - timedelta(hours=48)).isoformat()
     with store._tx() as conn:  # noqa: SLF001
         conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?", (stale, B))
-    store.sweep_phantoms(threshold_seconds=24 * 3600)
+    store.recompute_node_statuses(offline_seconds=900, phantom_seconds=24 * 3600)
 
     snap = build_topology(store=store)
     euis = {n["eui64"] for n in snap["nodes"]}
@@ -192,4 +192,4 @@ def test_topology_hides_phantoms_by_default(store: SQLiteStore) -> None:
     euis2 = {n["eui64"] for n in snap2["nodes"]}
     assert B in euis2
     b_row = next(n for n in snap2["nodes"] if n["eui64"] == B)
-    assert b_row["is_phantom"] is True
+    assert b_row["status"] == "phantom"

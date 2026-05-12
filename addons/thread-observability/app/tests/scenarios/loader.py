@@ -24,7 +24,7 @@ example)::
                     "active_routers": int | null
                 },
                 "router_id": int | null,
-                "phantom": bool                     // force is_phantom=1 if true
+                "phantom": bool                     // force status='phantom' if true
             }
         ],
         "links": [
@@ -117,7 +117,7 @@ def seed_store(store: SQLiteStore, scenario: dict[str, Any]) -> None:
         if node.get("phantom") is True:
             with store._lock:  # noqa: SLF001 - test seeding only
                 store._conn.execute(  # noqa: SLF001
-                    "UPDATE nodes SET is_phantom = 1, status = 'phantom' "
+                    "UPDATE nodes SET status = 'phantom' "
                     "WHERE eui64 = ?",
                     (eui,),
                 )

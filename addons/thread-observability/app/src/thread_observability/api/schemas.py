@@ -53,7 +53,6 @@ class TopologyNode(_Base):
     role: str | None = None
     routing_role: str | None = None
     partition_id: int | None = None
-    is_phantom: bool
 
 
 class TopologyLink(_Base):

@@ -338,7 +338,7 @@ def create_core_app() -> FastAPI:
             # Server-side sort: phantoms last, then by display_name.
             # Consumers (UI, AI) should render in this order; do not re-sort.
             all_nodes.sort(key=lambda n: (
-                1 if (n.get("status") == "phantom" or n.get("is_phantom")) else 0,
+                1 if n.get("status") == "phantom" else 0,
                 (n.get("display_name") or "").lower(),
             ))
         except Exception as exc:  # noqa: BLE001
@@ -346,7 +346,7 @@ def create_core_app() -> FastAPI:
         # Counts by status — saves every consumer recomputing them.
         node_counts: dict[str, int] = {"total": len(all_nodes)}
         for n in all_nodes:
-            st = n.get("status") or ("phantom" if n.get("is_phantom") else "online")
+            st = n.get("status") or "online"
             node_counts[st] = node_counts.get(st, 0) + 1
         node_counts.setdefault("online", 0)
         node_counts.setdefault("offline", 0)

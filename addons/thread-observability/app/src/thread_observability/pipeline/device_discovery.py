@@ -660,7 +660,7 @@ async def fetch_device_registry() -> list[dict[str, Any]]:
     
     # Now fetch device registry to get friendly names and metadata.
     # Thread-only: we no longer match zigbee connections.
-    reg_devices = _fallback_device_registry()
+    reg_devices = _load_device_registry()
     registry_by_eui: dict[str, dict[str, Any]] = {}
     registry_by_matter_node: dict[str, dict[str, Any]] = {}
     for dev in reg_devices:
@@ -762,10 +762,18 @@ async def fetch_device_registry() -> list[dict[str, Any]]:
     return list(merged.values())
 
 
-def _fallback_device_registry() -> list[dict[str, Any]]:
-    """Fallback: read device registry from .storage JSON file.
-    
-    If OTBR API is unavailable, read directly from HA's device registry file.
+def _load_device_registry() -> list[dict[str, Any]]:
+    """Load the HA device registry from ``/config/.storage/core.device_registry``.
+
+    Despite the legacy ``_fallback_`` name carried until v0.9.40, this is
+    the **primary and only** source of HA device-registry data for the
+    addon. The ``fetch_device_registry`` wrapper also consults OTBR's
+    ``/api/topology`` for Thread-side hints (role, rloc), but every
+    device_id / friendly_name / area mapping flows through this function.
+    The Supervisor proxy (``/core/api/config/device_registry/list``) is
+    a viable alternative, but the file read is faster and ``/config`` is
+    already mounted for the entity registry that ``ha_availability.py``
+    reads.
     """
     try:
         if not DEVICE_REGISTRY_PATH.exists():
@@ -1198,21 +1206,18 @@ async def _persist_matter_diagnostics(
     except Exception as exc:  # noqa: BLE001
         log.warning("purge_expired_nodes failed: %s", exc)
 
-    # Legacy sweep kept for diagnostics consumers that still inspect counts.
-    try:
-        sweep = s.sweep_phantoms(phantom_after_s)
-        phantom_marked = sweep["marked"]
-        phantom_cleared = sweep["cleared"]
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Phantom sweep failed: %s", exc)
-        phantom_marked = phantom_cleared = 0
+    # ``recompute_node_statuses`` (above) is the single source of truth
+    # for phantom state since v0.9.40 — the legacy ``sweep_phantoms``
+    # was retired along with the ``is_phantom`` column. The counters
+    # below are kept so downstream stats consumers don't break.
+    phantom_marked = phantom_cleared = 0
 
     # Filter out partitions whose only members are currently phantom (the
     # soil-sensor / re-commissioned-Foyer-Light case). A real split must
     # involve at least one live node beyond a single phantom.
     live_euis = {
         n["eui64"] for n in s.list_nodes()
-        if n.get("eui64") and not n.get("is_phantom")
+        if n.get("eui64") and n.get("status") != "phantom"
     }
     live_partitions: dict[int, list[str]] = {}
     excluded_partitions: list[int] = []

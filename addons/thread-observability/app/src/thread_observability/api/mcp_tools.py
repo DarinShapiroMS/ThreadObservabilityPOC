@@ -419,7 +419,7 @@ def _build_partition_state(include_phantoms: bool = False) -> dict[str, Any]:
     s = get_store()
     nodes = s.list_nodes()
     live_euis = {
-        n["eui64"] for n in nodes if n.get("eui64") and not n.get("is_phantom")
+        n["eui64"] for n in nodes if n.get("eui64") and n.get("status") != "phantom"
     }
     partitions: dict[int, list[str]] = {}
     leaders: dict[int, str] = {}
@@ -431,7 +431,7 @@ def _build_partition_state(include_phantoms: bool = False) -> dict[str, Any]:
         eui = n.get("eui64")
         if not eui:
             continue
-        if not include_phantoms and n.get("is_phantom"):
+        if not include_phantoms and n.get("status") == "phantom":
             continue
         partitions.setdefault(pid, []).append(eui)
         if n.get("routing_role") == "leader":

@@ -264,6 +264,17 @@ _MIGRATIONS: list[str] = [
     ALTER TABLE nodes ADD COLUMN availability_checked_at TEXT;
     CREATE INDEX IF NOT EXISTS idx_nodes_available ON nodes(available);
     """,
+    # v12: drop the legacy ``is_phantom`` column + its index.
+    # ``status = 'phantom'`` has been the authoritative lifecycle signal
+    # since v7; ``is_phantom`` was kept only as a transitional mirror for
+    # external consumers and is no longer written by
+    # ``recompute_node_statuses``. SQLite >= 3.35 supports ALTER TABLE
+    # DROP COLUMN; the addon ships Python 3.12 with a newer sqlite3
+    # module so this is safe.
+    """
+    DROP INDEX IF EXISTS idx_nodes_phantom;
+    ALTER TABLE nodes DROP COLUMN is_phantom;
+    """,
 ]
 
 
@@ -744,31 +755,10 @@ class SQLiteStore:
                     skipped += 1
         return {"applied": applied, "skipped": skipped}
 
-    def sweep_phantoms(self, threshold_seconds: int) -> dict[str, int]:
-        """Set is_phantom on rows whose last_referenced_at is older than the
-        threshold (or NULL). Returns counts of {marked, cleared}.
-        """
-        cutoff = (datetime.now(tz=UTC) - timedelta(seconds=threshold_seconds)).isoformat()
-        with self._tx() as conn:
-            cur = conn.execute(
-                "UPDATE nodes SET is_phantom = 1"
-                " WHERE is_phantom = 0"
-                "   AND (last_referenced_at IS NULL OR last_referenced_at < ?)",
-                (cutoff,),
-            )
-            marked = cur.rowcount
-            cur = conn.execute(
-                "UPDATE nodes SET is_phantom = 0"
-                " WHERE is_phantom = 1 AND last_referenced_at >= ?",
-                (cutoff,),
-            )
-            cleared = cur.rowcount
-        return {"marked": int(marked or 0), "cleared": int(cleared or 0)}
-
     def list_phantom_nodes(self) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM nodes WHERE is_phantom = 1"
+                "SELECT * FROM nodes WHERE status = 'phantom'"
                 " ORDER BY last_referenced_at IS NULL DESC, last_referenced_at ASC"
             ).fetchall()
         return [dict(r) for r in rows]
@@ -777,7 +767,7 @@ class SQLiteStore:
         """Delete phantom nodes and any links referencing them. Returns counts."""
         with self._tx() as conn:
             rows = conn.execute(
-                "SELECT eui64 FROM nodes WHERE is_phantom = 1"
+                "SELECT eui64 FROM nodes WHERE status = 'phantom'"
             ).fetchall()
             euis = [r[0] for r in rows]
             if not euis:
@@ -830,7 +820,6 @@ class SQLiteStore:
         compatibility but is now only consulted as a fallback when
         availability has never been probed.
 
-        ``is_phantom`` is mirrored from ``status = 'phantom'``.
         ``status_changed_at`` is bumped only when the value actually changes.
 
         Returns ``{state: count}`` summary plus ``changed`` (number of rows
@@ -851,8 +840,7 @@ class SQLiteStore:
                            WHEN status <> new_status THEN ?
                            ELSE status_changed_at
                        END,
-                       status     = new_status,
-                       is_phantom = CASE WHEN new_status = 'phantom' THEN 1 ELSE 0 END
+                       status     = new_status
                   FROM (
                       SELECT eui64,
                              CASE
