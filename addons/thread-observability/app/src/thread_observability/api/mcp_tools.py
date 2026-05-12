@@ -18,7 +18,6 @@ from ..pipeline import nodes as nodes_mod
 from ..pipeline import otbr_adapter
 from ..pipeline import reasoner as reasoner_mod
 from ..pipeline import topology as topology_mod
-from ..pipeline import seed as seed_mod
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
 
@@ -143,21 +142,6 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {"id": {"type": "integer"}},
             "required": ["id"],
-        },
-    },
-    {
-        "name": "seed_demo_topology",
-        "description": (
-            "DEV: populate SQLite with a deterministic demo topology (5 nodes, 4 links) "
-            "plus a couple of anomaly-triggering event patterns. Idempotent. Use to "
-            "validate the UI / reasoner before real ingestion lands."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "include_anomalies": {"type": "boolean", "default": True},
-            },
-            "required": [],
         },
     },
     {
@@ -562,12 +546,6 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
         try:
             ok = get_store().close_issue(int(arguments["id"]))
             return {"closed": ok, "id": int(arguments["id"])}
-        except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
-    if name == "seed_demo_topology":
-        try:
-            include = bool(arguments.get("include_anomalies", True))
-            return seed_mod.seed_demo_topology(include_anomalies=include)
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
     if name == "get_recent_logs":

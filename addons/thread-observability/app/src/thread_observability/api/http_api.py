@@ -7,6 +7,7 @@ JSON endpoints under ``/v1/...`` for programmatic access.
 import asyncio
 import contextlib
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,19 +16,41 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
 from . import supervisor_client
+from .mcp_tools import _build_partition_state, _build_phantom_list
 from ..config import get_config
 from ..health import build_health_snapshot
+from ..pipeline import device_discovery
 from ..pipeline import nodes as nodes_mod
 from ..pipeline import otbr_adapter
 from ..pipeline import reasoner as reasoner_mod
-from ..pipeline import seed as seed_mod
 from ..pipeline import topology as topology_mod
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
 
 log = logging.getLogger(__name__)
 
-ADDON_VERSION = "0.9.5"
+
+def _read_addon_version() -> str:
+    """Read version from config.yaml so it never drifts from the manifest."""
+    here = Path(__file__).resolve()
+    candidates = [
+        Path("/opt/thread-observability/config.yaml"),  # baked into image
+        Path("/config.yaml"),                       # mounted into container
+        Path("/app/config.yaml"),                   # alt container layout
+        *(p / "config.yaml" for p in here.parents), # walk up (covers dev tree)
+    ]
+    for p in candidates:
+        try:
+            if p.exists():
+                m = re.search(r"^version:\s*([^\s#]+)", p.read_text(), re.MULTILINE)
+                if m:
+                    return m.group(1).strip().strip('"').strip("'")
+        except OSError:
+            continue
+    return "unknown"
+
+
+ADDON_VERSION = _read_addon_version()
 LOG_PATH = Path("/data/thread-observability/addon.log")
 
 
@@ -114,12 +137,31 @@ DASHBOARD_HTML = """<!doctype html>
         <dt>active issues</dt><dd id="n-issues">&mdash;</dd>
         <dt>data age</dt><dd id="n-age">&mdash;</dd>
       </dl>
-      <div class="muted" style="margin-top:.5rem" id="net-hint">Awaiting events. Use “Seed demo” to populate.</div>
+      <div class="muted" style="margin-top:.5rem" id="net-hint">Awaiting events. Click “Discover Matter devices” to populate.</div>
+    </div>
+
+    <div class="card">
+      <div class="row"><h2>Partitions</h2><span id="part-pill" class="pill warn">loading</span></div>
+      <dl class="kv">
+        <dt>count</dt><dd id="p-count">&mdash;</dd>
+        <dt>split?</dt><dd id="p-split">&mdash;</dd>
+        <dt>last change</dt><dd id="p-last">&mdash;</dd>
+      </dl>
+      <div id="partitions-list" class="muted" style="margin-top:.5rem">none</div>
     </div>
 
     <div class="card">
       <div class="row"><h2>Active Issues</h2><span id="iss-pill" class="pill ok">0</span></div>
       <div id="issues-list" class="muted">none</div>
+    </div>
+
+    <div class="card wide">
+      <div class="row"><h2>Phantom Nodes</h2><span id="ph-pill" class="pill ok">0</span></div>
+      <div id="phantom-hint" class="muted" style="margin-bottom:.5rem">
+        Nodes not seen in any router's NeighborTable / RouteTable for &gt;24&nbsp;h.
+        Click <b>Open in HA</b> to delete manually (Settings → Devices &amp; Services → 3-dot menu → Delete).
+      </div>
+      <div id="phantoms-body">none</div>
     </div>
 
     <div class="card">
@@ -138,11 +180,16 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
 
     <div class="card wide">
-      <h2>Thread Nodes</h2>
+      <div class="row">
+        <h2>Thread Nodes</h2>
+        <label style="font-size:.8rem;opacity:.7">
+          <input type="checkbox" id="show-phantoms" onchange="refresh()"> show phantoms
+        </label>
+      </div>
       <table style="width:100%;border-collapse:collapse;font-size:.9rem">
         <thead style="border-bottom:1px solid #d1d5db">
           <tr>
-            <th style="text-align:left;padding:.5rem"># ID</th>
+            <th style="text-align:left;padding:.5rem">EUI</th>
             <th style="text-align:left;padding:.5rem">Name</th>
             <th style="text-align:left;padding:.5rem">Role</th>
             <th style="text-align:center;padding:.5rem">RSSI</th>
@@ -158,9 +205,9 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
 
     <div class="card wide">
-      <h2>Dev Actions</h2>
+      <h2>Actions</h2>
       <div class="links">
-        <button onclick="doPost('v1/dev/seed')">Seed demo topology</button>
+        <button onclick="doPost('v1/discover/run')">Discover Matter devices</button>
         <button onclick="doPost('v1/reasoner/run')">Run reasoner</button>
         <button onclick="doPost('v1/ingest/run')">Run OTBR ingest</button>
         <button onclick="refresh()">Refresh now</button>
@@ -182,13 +229,16 @@ DASHBOARD_HTML = """<!doctype html>
         <a href="v1/health/snapshot" target="_blank">/v1/health/snapshot</a>
         <a href="v1/issues/active" target="_blank">/v1/issues/active</a>
         <a href="v1/topology" target="_blank">/v1/topology</a>
+        <a href="v1/partitions" target="_blank">/v1/partitions</a>
+        <a href="v1/phantoms" target="_blank">/v1/phantoms</a>
+        <a href="v1/nodes/all" target="_blank">/v1/nodes/all</a>
         <a href="v1/dev/status" target="_blank">/v1/dev/status</a>
         <a href="health" target="_blank">/health</a>
       </div>
       <div class="muted" style="margin-top:.75rem">
         MCP JSON-RPC: <code>POST http://&lt;ha-host&gt;:8100/mcp</code> &middot;
-        tools include <code>ha_get_addon_state</code>, <code>ha_get_addon_logs</code>,
-        <code>ha_rebuild_addon</code>, <code>get_recent_logs</code>.
+        tools include <code>get_network_topology</code>, <code>get_partition_state</code>,
+        <code>list_phantom_nodes</code>, <code>discover_thread_devices</code>.
       </div>
     </div>
   </div>
@@ -224,8 +274,9 @@ function fmtKV(parent, obj) {
 }
 async function refresh() {
   document.getElementById('last-refresh').textContent = 'refreshed ' + new Date().toLocaleTimeString();
+  const showPhantoms = document.getElementById('show-phantoms').checked;
   try {
-    const s = await fetchJSON('v1/dev/status');
+    const s = await fetchJSON('v1/dev/status' + (showPhantoms ? '?include_phantoms=1' : ''));
     document.getElementById('version').textContent = 'v' + (s.addon_version || '?');
 
     const a = s.supervisor || {};
@@ -296,6 +347,70 @@ async function refresh() {
     document.getElementById('logs').textContent =
       (s.recent_logs || []).join('\\n') || '(no log entries yet)';
 
+    // ---- Partitions card ----
+    const part = s.partitions || {};
+    const pCount = part.partition_count || 0;
+    const split = !!part.split;
+    document.getElementById('p-count').textContent = pCount;
+    document.getElementById('p-split').textContent = split ? 'YES' : 'no';
+    document.getElementById('p-last').textContent = part.last_change_at || '—';
+    setPill(document.getElementById('part-pill'),
+            split ? 'err' : (pCount > 0 ? 'ok' : 'warn'),
+            split ? 'SPLIT' : (pCount > 0 ? 'healthy' : 'no data'));
+    const pList = document.getElementById('partitions-list');
+    const partitions = part.partitions || [];
+    if (partitions.length === 0) {
+      pList.className = 'muted'; pList.textContent = 'none';
+    } else {
+      pList.className = '';
+      pList.innerHTML = partitions.map(function(p) {
+        const lead = p.leader_eui64 ? '<code>' + p.leader_eui64.slice(-4).toUpperCase() + '</code>' : '<span class="muted">no leader</span>';
+        return '<div style="margin:.2rem 0;font-size:.85rem">'
+             + '<code>' + p.partition_id + '</code> &middot; leader ' + lead
+             + ' &middot; ' + p.member_count + ' member' + (p.member_count === 1 ? '' : 's')
+             + '</div>';
+      }).join('');
+    }
+
+    // ---- Phantom Nodes card ----
+    const ph = s.phantoms || {};
+    const phantoms = ph.phantoms || [];
+    const phPill = document.getElementById('ph-pill');
+    setPill(phPill, phantoms.length === 0 ? 'ok' : 'warn', String(phantoms.length));
+    const phBody = document.getElementById('phantoms-body');
+    if (phantoms.length === 0) {
+      phBody.className = 'muted'; phBody.textContent = 'none';
+    } else {
+      phBody.className = '';
+      phBody.innerHTML =
+        '<table style="width:100%;border-collapse:collapse;font-size:.85rem">'
+      + '<thead style="border-bottom:1px solid #d1d5db"><tr>'
+      + '<th style="text-align:left;padding:.4rem">Name</th>'
+      + '<th style="text-align:left;padding:.4rem">EUI</th>'
+      + '<th style="text-align:left;padding:.4rem">Area</th>'
+      + '<th style="text-align:left;padding:.4rem">Last referenced</th>'
+      + '<th style="text-align:left;padding:.4rem">Last seen</th>'
+      + '<th style="text-align:center;padding:.4rem">HA</th>'
+      + '</tr></thead><tbody>'
+      + phantoms.map(function(p) {
+          const ref = p.last_referenced_at ? new Date(p.last_referenced_at).toLocaleString() : '—';
+          const seen = p.last_seen ? new Date(p.last_seen).toLocaleString() : '—';
+          const eui = '<code>' + (p.eui64 || '').slice(-4).toUpperCase() + '</code>';
+          const link = p.ha_device_path
+            ? '<a href="' + p.ha_device_path + '" target="_top">Open in HA</a>'
+            : '<span class="muted">no device_id</span>';
+          return '<tr style="border-bottom:1px solid #e5e7eb">'
+               + '<td style="padding:.4rem">' + (p.friendly_name || '?') + '</td>'
+               + '<td style="padding:.4rem">' + eui + '</td>'
+               + '<td style="padding:.4rem">' + (p.area || '—') + '</td>'
+               + '<td style="padding:.4rem;font-size:.8em">' + ref + '</td>'
+               + '<td style="padding:.4rem;font-size:.8em">' + seen + '</td>'
+               + '<td style="text-align:center;padding:.4rem">' + link + '</td>'
+               + '</tr>';
+        }).join('')
+      + '</tbody></table>';
+    }
+
     const st = s.storage || {};
     const ts = s.timeseries || {};
     if (st.error) {
@@ -338,7 +453,7 @@ async function refresh() {
     const allNodes = s.all_nodes || [];
     const tbody = document.getElementById('nodes-tbody');
     if (allNodes.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="muted" style="padding:.5rem">(no nodes yet; use Seed demo or enable OTBR ingestion)</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="muted" style="padding:.5rem">(no nodes yet; click “Discover Matter devices” or enable OTBR ingestion)</td></tr>';
     } else {
       tbody.innerHTML = allNodes.map(function(n) {
         const statusPill = '<span class="pill ' + (n.status === 'healthy' ? 'ok' : n.status === 'stale' ? 'warn' : 'err') + '">'
@@ -347,9 +462,15 @@ async function refresh() {
         const sig = (n.signal_strength || {});
         const rssi = sig.rssi !== null && sig.rssi !== undefined ? sig.rssi + ' dBm' : '—';
         const lqi = sig.lqi !== null && sig.lqi !== undefined ? sig.lqi : '—';
-        return '<tr style="border-bottom:1px solid #e5e7eb">'
+        const phantomTag = n.is_phantom
+          ? ' <span class="pill warn" title="not seen in any router\\'s tables">phantom</span>'
+          : '';
+        const rowStyle = n.is_phantom
+          ? 'border-bottom:1px solid #e5e7eb;opacity:.55'
+          : 'border-bottom:1px solid #e5e7eb';
+        return '<tr style="' + rowStyle + '">'
                + '<td style="padding:.5rem"><code style="font-size:.8em">' + (n.eui64 || '?').slice(-4).toUpperCase() + '</code></td>'
-               + '<td style="padding:.5rem">' + (n.friendly_name || n.display_name || '?') + '</td>'
+               + '<td style="padding:.5rem">' + (n.friendly_name || n.display_name || '?') + phantomTag + '</td>'
                + '<td style="padding:.5rem">' + (n.role || '?') + '</td>'
                + '<td style="text-align:center;padding:.5rem">' + rssi + '</td>'
                + '<td style="text-align:center;padding:.5rem">' + lqi + '</td>'
@@ -431,11 +552,25 @@ def create_core_app() -> FastAPI:
             return {"count": 0, "issues": [], "error": str(exc), "computed_at": _utc_now()}
 
     @app.get("/v1/topology")
-    def topology_snapshot() -> dict[str, object]:
+    def topology_snapshot(include_phantoms: bool = False) -> dict[str, object]:
         try:
-            return topology_mod.build_topology()
+            return topology_mod.build_topology(include_phantoms=include_phantoms)
         except Exception as exc:  # noqa: BLE001
             return {"nodes": [], "links": [], "error": str(exc), "computed_at": _utc_now()}
+
+    @app.get("/v1/partitions")
+    def partitions_snapshot(include_phantoms: bool = False) -> dict[str, object]:
+        try:
+            return _build_partition_state(include_phantoms=include_phantoms)
+        except Exception as exc:  # noqa: BLE001
+            return {"partition_count": 0, "partitions": [], "error": str(exc)}
+
+    @app.get("/v1/phantoms")
+    def phantoms_snapshot() -> dict[str, object]:
+        try:
+            return _build_phantom_list()
+        except Exception as exc:  # noqa: BLE001
+            return {"count": 0, "phantoms": [], "error": str(exc)}
 
     @app.post("/v1/reasoner/run")
     def reasoner_run() -> dict[str, object]:
@@ -444,17 +579,16 @@ def create_core_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 
-    @app.post("/v1/dev/seed")
-    def dev_seed() -> dict[str, object]:
+    @app.post("/v1/discover/run")
+    async def discover_run() -> dict[str, object]:
+        """Trigger a Matter cluster-53 discovery + sync cycle."""
         try:
-            seeded = seed_mod.seed_demo_topology()
-            reasoned = reasoner_mod.run_reasoner()
-            return {"seeded": seeded, "reasoner": reasoned}
+            return await device_discovery.discover_and_sync()
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 
     @app.get("/v1/dev/status")
-    async def dev_status() -> dict[str, object]:
+    async def dev_status(include_phantoms: bool = False) -> dict[str, object]:
         try:
             sup: dict[str, object] = await supervisor_client.get_addon_info()
         except Exception as exc:  # noqa: BLE001
@@ -478,16 +612,29 @@ def create_core_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             ingestion = {"error": str(exc)}
         try:
-            all_nodes = nodes_mod.list_nodes_enriched(include_signal_strength=True)
+            all_nodes = nodes_mod.list_nodes_enriched(
+                include_signal_strength=True,
+                include_phantoms=include_phantoms,
+            )
         except Exception as exc:  # noqa: BLE001
             all_nodes = []
+        try:
+            partitions = _build_partition_state(include_phantoms=include_phantoms)
+        except Exception as exc:  # noqa: BLE001
+            partitions = {"error": str(exc)}
+        try:
+            phantoms = _build_phantom_list()
+        except Exception as exc:  # noqa: BLE001
+            phantoms = {"error": str(exc), "phantoms": []}
         return {
             "addon_version": ADDON_VERSION,
             "checked_at": _utc_now(),
             "supervisor": sup,
             "health": health_snapshot(),
             "issues": list_active_issues(),
-            "topology": topology_snapshot(),
+            "topology": topology_snapshot(include_phantoms=include_phantoms),
+            "partitions": partitions,
+            "phantoms": phantoms,
             "recent_logs": _tail_log(80),
             "storage": storage,
             "timeseries": ts_health,

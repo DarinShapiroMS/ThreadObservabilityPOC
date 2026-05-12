@@ -15,6 +15,7 @@ WORKDIR /opt/thread-observability
 
 COPY app/ /opt/thread-observability/app/
 COPY rootfs/ /
+COPY config.yaml /opt/thread-observability/config.yaml
 
 RUN mkdir -p /data/thread-observability \
     && sed -i 's/\r$//' /etc/s6-overlay/s6-rc.d/core/run \

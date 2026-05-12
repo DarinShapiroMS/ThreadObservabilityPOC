@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.21 — Dashboard UI for phantoms + partitions, RSSI from links, drop seed/demo
+
+- **RSSI/LQI now populates** in the Thread Nodes table. `get_latest_signal_strength` now reads from the Matter cluster-53 `links` table (per-router NeighborTable `rssi_avg` / `lqi_in`), picking the strongest incoming edge, with event-log fallback
+- **Phantom Nodes card** in the dashboard lists every phantom with friendly_name, area, last_referenced_at, last_seen, and an "Open in HA" deep-link (`/config/devices/device/<id>`) for manual deletion
+- **Partitions card** shows partition_count, split flag (red `SPLIT` pill when split), leader EUIs, and member counts. Honors phantom filtering
+- **Show phantoms** toggle on the Thread Nodes table — when enabled, phantom rows render dimmed with a `phantom` pill
+- **Discover Matter devices** button in the Actions card (was MCP-only before); calls the new `POST /v1/discover/run` route
+- New HTTP routes: `/v1/partitions`, `/v1/phantoms`, `/v1/discover/run`. `/v1/topology` and `/v1/dev/status` now accept `?include_phantoms=true`
+- `ADDON_VERSION` is now read from `config.yaml` at startup so it can never drift (was hardcoded to `0.9.5` since v0.9.5 — wrong for 15 releases)
+- **Removed seed/demo topology** entirely (`pipeline/seed.py`, MCP tool `seed_demo_topology`, route `/v1/dev/seed`, dashboard button). Real data flow now works; the seed was no longer providing value
+- Tests: 67 passing (unchanged)
+
 ## 0.9.20 — Phantom-node detection (stale-reference filtering)
 
 - **Schema v4** adds `nodes.last_referenced_at` and `nodes.is_phantom` plus supporting indexes
