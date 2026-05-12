@@ -77,11 +77,19 @@ TOOL_DEFS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "list_active_issues",
-        "description": "Return all currently-open Thread network issues from the SQLite issues table.",
+        "name": "get_partition_state",
+        "description": (
+            "Return current Thread partition state. A healthy network has a single "
+            "partition_id across all routers; multiple distinct partition_ids "
+            "indicate a network split (mesh has fragmented into isolated groups)."
+        ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "list_active_issues",
+        "description": "Return all currently-open Thread network issues from the SQLite issues table.",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },    {
         "name": "get_health_snapshot",
         "description": (
             "Return current health snapshot: node counts by status (healthy / stale / offline), "
@@ -388,6 +396,49 @@ TOOL_DEFS: list[dict[str, Any]] = [
 _TOOL_MAP = {t["name"]: t for t in TOOL_DEFS}
 
 
+def _build_partition_state() -> dict[str, Any]:
+    """Summarize current Thread partition state from the nodes table."""
+    s = get_store()
+    nodes = s.list_nodes()
+    partitions: dict[int, list[str]] = {}
+    leaders: dict[int, str] = {}
+    diag_seen: list[str] = []
+    for n in nodes:
+        pid = n.get("partition_id")
+        if not isinstance(pid, int):
+            continue
+        eui = n.get("eui64")
+        if not eui:
+            continue
+        partitions.setdefault(pid, []).append(eui)
+        if n.get("routing_role") == "leader":
+            leaders.setdefault(pid, eui)
+        ts = n.get("diag_updated_at")
+        if ts:
+            diag_seen.append(ts)
+
+    events = s.query_events(event_type="partition_change", limit=10)
+    last_change = events[0].get("ts") if events else None
+
+    partition_summary = [
+        {
+            "partition_id": pid,
+            "leader_eui64": leaders.get(pid),
+            "member_count": len(members),
+            "members": members,
+        }
+        for pid, members in sorted(partitions.items())
+    ]
+    return {
+        "partition_count": len(partitions),
+        "split": len(partitions) > 1,
+        "partitions": partition_summary,
+        "last_change_at": last_change,
+        "last_observed_at": max(diag_seen) if diag_seen else None,
+        "recent_changes": events,
+    }
+
+
 async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Execute a tool and return its result payload."""
     if name == "get_network_topology":
@@ -400,6 +451,11 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
         try:
             issues = get_store().list_active_issues()
             return {"count": len(issues), "issues": issues}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "get_partition_state":
+        try:
+            return _build_partition_state()
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
     if name == "get_health_snapshot":

@@ -90,6 +90,38 @@ _MIGRATIONS: list[str] = [
         last_event_ts  TEXT
     );
     """,
+    # v2: thread mesh links from Matter cluster 53 NeighborTable / RouteTable
+    """
+    CREATE TABLE IF NOT EXISTS links (
+        reporter_eui64  TEXT NOT NULL,
+        neighbor_eui64  TEXT NOT NULL,
+        source          TEXT NOT NULL,   -- 'neighbor_table' | 'route_table'
+        rssi_avg        INTEGER,
+        rssi_last       INTEGER,
+        lqi_in          INTEGER,
+        lqi_out         INTEGER,
+        is_child        INTEGER,         -- 0/1
+        age_seconds     INTEGER,
+        frame_error_rate INTEGER,
+        message_error_rate INTEGER,
+        path_cost       INTEGER,
+        observed_at     TEXT NOT NULL,
+        PRIMARY KEY (reporter_eui64, neighbor_eui64, source)
+    );
+    CREATE INDEX IF NOT EXISTS idx_links_reporter ON links(reporter_eui64);
+    CREATE INDEX IF NOT EXISTS idx_links_neighbor ON links(neighbor_eui64);
+    CREATE INDEX IF NOT EXISTS idx_links_observed ON links(observed_at DESC);
+    """,
+    # v3: per-node Thread diagnostics scalars (partition, role, leader)
+    """
+    ALTER TABLE nodes ADD COLUMN partition_id     INTEGER;
+    ALTER TABLE nodes ADD COLUMN leader_router_id INTEGER;
+    ALTER TABLE nodes ADD COLUMN routing_role     TEXT;
+    ALTER TABLE nodes ADD COLUMN active_routers   INTEGER;
+    ALTER TABLE nodes ADD COLUMN channel          INTEGER;
+    ALTER TABLE nodes ADD COLUMN weighting        INTEGER;
+    ALTER TABLE nodes ADD COLUMN diag_updated_at  TEXT;
+    """,
 ]
 
 
@@ -308,13 +340,113 @@ class SQLiteStore:
             cur = conn.execute(query, params)
             return cur.rowcount > 0
 
+    def set_node_diagnostics(
+        self,
+        eui64: str,
+        *,
+        partition_id: int | None = None,
+        leader_router_id: int | None = None,
+        routing_role: str | None = None,
+        active_routers: int | None = None,
+        channel: int | None = None,
+        weighting: int | None = None,
+    ) -> bool:
+        """Update Thread diagnostic scalars for a node. Returns True if row updated."""
+        with self._tx() as conn:
+            cur = conn.execute(
+                """
+                UPDATE nodes SET
+                    partition_id     = ?,
+                    leader_router_id = ?,
+                    routing_role     = ?,
+                    active_routers   = ?,
+                    channel          = ?,
+                    weighting        = ?,
+                    diag_updated_at  = ?
+                WHERE eui64 = ?
+                """,
+                (
+                    partition_id, leader_router_id, routing_role,
+                    active_routers, channel, weighting,
+                    _utc_now(), eui64,
+                ),
+            )
+            return cur.rowcount > 0
+
+    # -- links ---------------------------------------------------------
+
+    def replace_links_for_reporter(
+        self,
+        reporter_eui64: str,
+        source: str,
+        links: list[dict[str, Any]],
+    ) -> int:
+        """Replace all links for a given (reporter, source) tuple atomically.
+
+        Each link dict may include: neighbor_eui64 (required), rssi_avg,
+        rssi_last, lqi_in, lqi_out, is_child, age_seconds, frame_error_rate,
+        message_error_rate, path_cost.
+
+        Returns the number of link rows inserted.
+        """
+        now = _utc_now()
+        inserted = 0
+        with self._tx() as conn:
+            conn.execute(
+                "DELETE FROM links WHERE reporter_eui64 = ? AND source = ?",
+                (reporter_eui64, source),
+            )
+            for link in links:
+                neighbor = link.get("neighbor_eui64")
+                if not neighbor:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO links(
+                        reporter_eui64, neighbor_eui64, source,
+                        rssi_avg, rssi_last, lqi_in, lqi_out,
+                        is_child, age_seconds,
+                        frame_error_rate, message_error_rate, path_cost,
+                        observed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        reporter_eui64,
+                        neighbor,
+                        source,
+                        link.get("rssi_avg"),
+                        link.get("rssi_last"),
+                        link.get("lqi_in"),
+                        link.get("lqi_out"),
+                        1 if link.get("is_child") else (0 if link.get("is_child") is False else None),
+                        link.get("age_seconds"),
+                        link.get("frame_error_rate"),
+                        link.get("message_error_rate"),
+                        link.get("path_cost"),
+                        now,
+                    ),
+                )
+                inserted += 1
+        return inserted
+
+    def list_links(self, source: str | None = None) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM links"
+        params: list[Any] = []
+        if source:
+            sql += " WHERE source = ?"
+            params.append(source)
+        sql += " ORDER BY reporter_eui64, neighbor_eui64"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
     # -- stats ---------------------------------------------------------
 
     def stats(self) -> dict[str, Any]:
         with self._lock:
             counts = {
                 t: int(self._conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
-                for t in ("nodes", "events", "issues", "metadata_cache", "ingest_state")
+                for t in ("nodes", "events", "issues", "metadata_cache", "ingest_state", "links")
             }
             oldest = self._conn.execute("SELECT MIN(ts) FROM events").fetchone()[0]
             newest = self._conn.execute("SELECT MAX(ts) FROM events").fetchone()[0]

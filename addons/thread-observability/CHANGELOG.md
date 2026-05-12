@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.19 — Thread topology from Matter cluster 53 + partition split detection
+
+- New `links` table (schema v2) persists per-reporter neighbor/route adjacencies
+- Schema v3 adds per-node diagnostic columns: `partition_id`, `leader_router_id`, `routing_role`, `active_routers`, `channel`, `weighting`, `diag_updated_at`
+- Matter bridge now decodes `0/53/7` NeighborTable and `0/53/8` RouteTable struct lists per Matter spec field IDs, plus partition scalars (`0/53/0,1,9,10,13`)
+- `discover_and_sync` persists neighbor + route links and Thread scalars per node, emits `partition_change` events on transitions, and opens/closes a `partition_split` issue automatically when multiple distinct `partition_id`s appear
+- `build_topology` now sources real mesh edges from the links table, tags `weak_link` (RSSI < -85 dBm), `high_error` (FER/MER > 10%), and `asymmetric` (|A→B − B→A| > 10 dB), infers `parent_eui64` from `is_child=1` neighbor entries, and emits `partitions[]` + `split` bool
+- New MCP tool `get_partition_state` returns current partitions, leader EUIs, split flag, and recent `partition_change` events
+- Tests: +13 new (decoders, links table CRUD, diagnostics scalars, partition split/healthy/asymmetry); 63 total passing
+
 ## 0.9.18 — Un-flip U/L bit when deriving EUI64 from IPv6 IID
 
 - OTBR log parser converted Mesh-Local IPv6 IIDs (e.g. `c6b7:...`) directly to EUI64 strings, but per RFC 4291 the modified-EUI64 IID has bit 6 of byte 0 flipped

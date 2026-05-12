@@ -37,9 +37,34 @@ MATTER_WS_TIMEOUT = float(os.getenv("MATTER_WS_TIMEOUT", "5.0"))
 # attribute (0x0000 = 0). python-matter-server keys attribute values as
 # "<endpoint>/<cluster>/<attribute>" strings.
 _MATTER_GENERAL_DIAG_NETIF_KEY = "0/51/0"
-# Matter Thread Network Diagnostics cluster id (0x0035 = 53), ExtAddress
-# attribute (0x000F = 15) — defined as the 8-byte Thread EUI64.
+# Matter Thread Network Diagnostics cluster id (0x0035 = 53). Attribute IDs:
+#   0  Channel
+#   1  RoutingRole (enum)
+#   7  NeighborTable (list of struct)
+#   8  RouteTable   (list of struct)
+#   9  PartitionId
+#   10 Weighting
+#   13 LeaderRouterId
+#   15 ExtAddress (8-byte Thread EUI64)
 _MATTER_THREAD_DIAG_EXTADDR_SUFFIX = "/53/15"
+
+# Matter RoutingRole enum (Matter 1.x Thread Network Diagnostics cluster).
+_ROUTING_ROLE_NAMES: dict[int, str] = {
+    0: "unspecified",
+    1: "unassigned",
+    2: "sleepy_end_device",
+    3: "end_device",
+    4: "reed",
+    5: "router",
+    6: "leader",
+}
+
+# Module-level cache populated by `_load_matter_node_bridge_async`. Holds the
+# most recent rich per-node info (EUI64 + diagnostics + neighbor/route tables)
+# so `discover_and_sync` can persist them without a second WS roundtrip.
+# Shape: {canonical_node_id: {"eui64": str|None, "diagnostics": {...},
+#         "neighbor_table": [...], "route_table": [...] } }
+_LAST_MATTER_RICH_INFO: dict[str, dict[str, Any]] = {}
 
 # Thread-only connection types (we intentionally do NOT include zigbee here).
 _THREAD_CONN_TYPES = ("thread", "ieee802154")
@@ -166,6 +191,135 @@ def _hardware_address_to_eui64(raw: Any) -> str | None:
     return None
 
 
+def _ext_address_to_eui64(raw: Any) -> str | None:
+    """Decode a NeighborTable / RouteTable ExtAddress field to 16-hex EUI64.
+
+    Matter spec types ExtAddress as uint64. matter-server may deliver it as
+    int, hex string, base64 octet string, or byte list. Returns None for
+    anything that does not yield 8 bytes.
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        if raw < 0 or raw > 0xFFFFFFFFFFFFFFFF:
+            return None
+        return f"{raw:016x}"
+    return _hardware_address_to_eui64(raw)
+
+
+def _field(struct: dict[str, Any], int_key: int, *str_keys: str) -> Any:
+    """Defensively read a struct field by Matter integer id or named alias."""
+    if not isinstance(struct, dict):
+        return None
+    val = struct.get(str(int_key))
+    if val is not None:
+        return val
+    for k in str_keys:
+        v = struct.get(k)
+        if v is not None:
+            return v
+    return None
+
+
+def _coerce_int(v: Any) -> int | None:
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, int):
+        return v
+    return None
+
+
+def _decode_neighbor_table(raw: Any) -> list[dict[str, Any]]:
+    """Decode a Matter NeighborTable attribute (cluster 53 attr 7).
+
+    NeighborTableStruct fields per Matter spec:
+      0 ExtAddress, 1 Age, 2 Rloc16, 5 LQI, 6 AverageRssi, 7 LastRssi,
+      8 FrameErrorRate, 9 MessageErrorRate, 13 IsChild.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        eui = _ext_address_to_eui64(_field(entry, 0, "extAddress", "ExtAddress"))
+        if not eui:
+            continue
+        is_child_raw = _field(entry, 13, "isChild", "IsChild")
+        out.append({
+            "neighbor_eui64": eui,
+            "rssi_avg": _coerce_int(_field(entry, 6, "averageRssi", "AverageRssi")),
+            "rssi_last": _coerce_int(_field(entry, 7, "lastRssi", "LastRssi")),
+            "lqi_in": _coerce_int(_field(entry, 5, "lqi", "LQI")),
+            "lqi_out": None,
+            "is_child": 1 if is_child_raw else (0 if is_child_raw is not None else None),
+            "age_seconds": _coerce_int(_field(entry, 1, "age", "Age")),
+            "frame_error_rate": _coerce_int(_field(entry, 8, "frameErrorRate", "FrameErrorRate")),
+            "message_error_rate": _coerce_int(_field(entry, 9, "messageErrorRate", "MessageErrorRate")),
+            "path_cost": None,
+        })
+    return out
+
+
+def _decode_route_table(raw: Any) -> list[dict[str, Any]]:
+    """Decode a Matter RouteTable attribute (cluster 53 attr 8).
+
+    RouteTableStruct fields per Matter spec:
+      0 ExtAddress, 1 Rloc16, 2 RouterId, 3 NextHop, 4 PathCost,
+      5 LQIIn, 6 LQIOut, 7 Age, 8 Allocated, 9 LinkEstablished.
+    Entries with LinkEstablished=False are skipped (not direct neighbors).
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        eui = _ext_address_to_eui64(_field(entry, 0, "extAddress", "ExtAddress"))
+        if not eui:
+            continue
+        link_est = _field(entry, 9, "linkEstablished", "LinkEstablished")
+        if link_est is False:
+            continue
+        out.append({
+            "neighbor_eui64": eui,
+            "rssi_avg": None,
+            "rssi_last": None,
+            "lqi_in": _coerce_int(_field(entry, 5, "lqiIn", "LQIIn")),
+            "lqi_out": _coerce_int(_field(entry, 6, "lqiOut", "LQIOut")),
+            "is_child": None,
+            "age_seconds": _coerce_int(_field(entry, 7, "age", "Age")),
+            "frame_error_rate": None,
+            "message_error_rate": None,
+            "path_cost": _coerce_int(_field(entry, 4, "pathCost", "PathCost")),
+        })
+    return out
+
+
+def _extract_thread_diagnostics(attrs: dict[str, Any]) -> dict[str, Any]:
+    """Pull cluster-53 Thread scalars from a matter-server node's attributes.
+
+    Only considers endpoint 0 (root) — Thread diagnostics live there.
+    """
+    def _get_int(suffix: str) -> int | None:
+        val = attrs.get(f"0/53/{suffix}")
+        if isinstance(val, bool):
+            return int(val)
+        if isinstance(val, int):
+            return val
+        return None
+
+    role_int = _get_int("1")
+    return {
+        "channel": _get_int("0"),
+        "routing_role_int": role_int,
+        "routing_role": _ROUTING_ROLE_NAMES.get(role_int) if role_int is not None else None,
+        "partition_id": _get_int("9"),
+        "weighting": _get_int("10"),
+        "leader_router_id": _get_int("13"),
+    }
+
+
 async def _load_matter_node_bridge_async() -> dict[str, str]:
     """Build a Matter ``node_id`` -> Thread EUI64 mapping via matter-server WS.
 
@@ -247,6 +401,7 @@ async def _load_matter_node_bridge_async() -> dict[str, str]:
         )
 
     dumped_sample = False
+    rich_cache: dict[str, dict[str, Any]] = {}
     for node in nodes:
         if not isinstance(node, dict):
             continue
@@ -315,9 +470,31 @@ async def _load_matter_node_bridge_async() -> dict[str, str]:
             if canon:
                 bridge[canon] = eui
 
+        # Always try to extract Thread diagnostics + neighbor/route tables,
+        # even if we couldn't resolve EUI here (cache keyed by canonical
+        # node_id so downstream can still cross-reference).
+        canon_for_rich = _canonical_matter_node_id(node_id)
+        if canon_for_rich:
+            diagnostics = _extract_thread_diagnostics(attrs)
+            neighbor_table = _decode_neighbor_table(attrs.get("0/53/7"))
+            route_table = _decode_route_table(attrs.get("0/53/8"))
+            if eui or diagnostics["partition_id"] is not None or neighbor_table or route_table:
+                rich_cache[canon_for_rich] = {
+                    "eui64": eui,
+                    "diagnostics": diagnostics,
+                    "neighbor_table": neighbor_table,
+                    "route_table": route_table,
+                }
+
+    # Publish the rich cache so `discover_and_sync` can persist diagnostics.
+    global _LAST_MATTER_RICH_INFO
+    _LAST_MATTER_RICH_INFO = rich_cache
     log.info(
-        "Matter bridge: extracted %d EUI64 mappings from %d nodes",
-        len(bridge), len(nodes),
+        "Matter bridge: extracted %d EUI64 mappings from %d nodes "
+        "(rich_info entries=%d, with_neighbor_table=%d, with_route_table=%d)",
+        len(bridge), len(nodes), len(rich_cache),
+        sum(1 for v in rich_cache.values() if v["neighbor_table"]),
+        sum(1 for v in rich_cache.values() if v["route_table"]),
     )
     return bridge
 
@@ -664,12 +841,135 @@ async def discover_and_sync(store: SQLiteStore | None = None) -> dict[str, Any]:
         "device discovery: scanned %d devices, found %d matches, updated %d, inserted %d",
         len(devices), len(matches), updated, inserted,
     )
+
+    # Persist Thread diagnostics + neighbor/route tables harvested from
+    # matter-server (cluster 53). Also detect partition splits.
+    diag_summary = _persist_matter_diagnostics(s, nodes)
+
     return {
         "devices_scanned": len(devices),
         "matched": len(matches),
         "updated": updated,
         "inserted": inserted,
         "matches": matches,
+        "diagnostics": diag_summary,
+    }
+
+
+def _persist_matter_diagnostics(
+    s: SQLiteStore,
+    prior_nodes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Persist cached Thread diagnostics (cluster 53) to the store.
+
+    Uses `_LAST_MATTER_RICH_INFO` populated by the most recent bridge call.
+    Returns a summary dict suitable for the discover_and_sync response.
+    """
+    rich = _LAST_MATTER_RICH_INFO
+    if not rich:
+        return {"nodes_with_diagnostics": 0, "links_recorded": 0, "partition_split": False}
+
+    prior_by_eui = {n.get("eui64"): n for n in prior_nodes if n.get("eui64")}
+
+    links_recorded = 0
+    diag_nodes = 0
+    partitions: dict[int, list[str]] = {}
+    partition_change_events = 0
+    leaders_by_partition: dict[int, str] = {}
+
+    for _node_id, info in rich.items():
+        eui = info.get("eui64")
+        if not eui:
+            continue
+        diag = info.get("diagnostics") or {}
+        neighbor_table = info.get("neighbor_table") or []
+        route_table = info.get("route_table") or []
+
+        # Persist links (replace per source). End devices typically have
+        # neither table populated; we still issue replace calls so stale
+        # rows from prior cycles get cleared.
+        try:
+            s.replace_links_for_reporter(eui, "neighbor_table", neighbor_table)
+            s.replace_links_for_reporter(eui, "route_table", route_table)
+            links_recorded += len(neighbor_table) + len(route_table)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Failed to persist links for %s: %s", eui, exc)
+
+        # Persist scalars.
+        try:
+            updated_diag = s.set_node_diagnostics(
+                eui,
+                partition_id=diag.get("partition_id"),
+                leader_router_id=diag.get("leader_router_id"),
+                routing_role=diag.get("routing_role"),
+                active_routers=len(route_table) or None,
+                channel=diag.get("channel"),
+                weighting=diag.get("weighting"),
+            )
+            if updated_diag:
+                diag_nodes += 1
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Failed to persist diagnostics for %s: %s", eui, exc)
+
+        # Partition tracking + change detection.
+        pid = diag.get("partition_id")
+        if isinstance(pid, int):
+            partitions.setdefault(pid, []).append(eui)
+            role = diag.get("routing_role")
+            if role == "leader":
+                leaders_by_partition.setdefault(pid, eui)
+            prior = prior_by_eui.get(eui) or {}
+            prior_pid = prior.get("partition_id")
+            if prior_pid is not None and prior_pid != pid:
+                try:
+                    s.insert_event(
+                        eui64=eui,
+                        type="partition_change",
+                        payload={"from": prior_pid, "to": pid},
+                    )
+                    partition_change_events += 1
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Failed to insert partition_change event for %s: %s", eui, exc)
+
+    split = len(partitions) > 1
+    partition_summary = [
+        {
+            "partition_id": pid,
+            "leader_eui64": leaders_by_partition.get(pid),
+            "member_count": len(members),
+            "members": members,
+        }
+        for pid, members in sorted(partitions.items())
+    ]
+
+    # Open/close partition_split issue.
+    try:
+        active = [i for i in s.list_active_issues() if i.get("kind") == "partition_split"]
+        if split:
+            s.open_issue(
+                kind="partition_split",
+                severity="warning",
+                evidence={
+                    "partitions": partition_summary,
+                    "partition_count": len(partitions),
+                },
+            )
+        else:
+            for issue in active:
+                s.close_issue(int(issue["id"]))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to update partition_split issue: %s", exc)
+
+    log.info(
+        "diagnostics persisted: nodes=%d links=%d partitions=%d split=%s changes=%d",
+        diag_nodes, links_recorded, len(partitions), split, partition_change_events,
+    )
+    return {
+        "nodes_with_diagnostics": diag_nodes,
+        "links_recorded": links_recorded,
+        "partition_split": split,
+        "partitions": partition_summary,
+        "partition_change_events": partition_change_events,
     }
 
 

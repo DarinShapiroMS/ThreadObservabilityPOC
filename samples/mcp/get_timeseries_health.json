@@ -1,0 +1,1 @@
+﻿{"_captured_at":"2026-05-11T16:49:05.7016153-07:00","_tool":"get_timeseries_health","_args":{},"response":{"status_code": 200, "payload": {"backend": "sqlite-fallback"}, "backend": "sqlite-fallback"}}

@@ -1,0 +1,1 @@
+﻿{"_captured_at":"2026-05-11T16:49:00.4465430-07:00","_tool":"get_health_snapshot","_args":{},"response":{"computed_at": "2026-05-11T23:48:57.468173+00:00", "status": "degraded", "data_age_seconds": 23914.273173, "summary": {"healthy_nodes": 0, "stale_nodes": 0, "offline_nodes": 10, "total_nodes": 10}, "active_issues": {"count": 0, "by_severity": {}}}}

@@ -1,0 +1,1 @@
+﻿{"_captured_at":"2026-05-11T16:49:00.8718304-07:00","_tool":"list_otbr_candidates","_args":{},"response":{"count": 1, "candidates": [{"slug": "core_openthread_border_router", "name": "OpenThread Border Router", "version": "2.16.8", "state": "started", "update_available": false}]}}

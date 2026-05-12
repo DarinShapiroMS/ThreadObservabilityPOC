@@ -8,9 +8,9 @@ from thread_observability.storage.sqlite_store import SQLiteStore
 
 
 def test_migrations_apply(store: SQLiteStore) -> None:
-    assert store.schema_version == 1
+    assert store.schema_version == 3
     stats = store.stats()
-    assert stats["schema_version"] == 1
+    assert stats["schema_version"] == 3
     assert stats["row_counts"]["events"] == 0
 
 
@@ -59,3 +59,44 @@ def test_query_events_since(store: SQLiteStore) -> None:
     recent = store.query_events(since=(datetime.now(tz=UTC) - timedelta(hours=1)).isoformat())
     assert len(recent) == 1
     assert recent[0]["ts"] == new
+
+
+def test_links_replace_and_list(store: SQLiteStore) -> None:
+    A = "aa" * 8
+    B = "bb" * 8
+    C = "cc" * 8
+    n = store.replace_links_for_reporter(A, "neighbor_table", [
+        {"neighbor_eui64": B, "rssi_avg": -50},
+        {"neighbor_eui64": C, "rssi_avg": -60, "is_child": 1},
+    ])
+    assert n == 2
+    rows = store.list_links()
+    assert len(rows) == 2
+    # Replace overwrites prior entries for the same (reporter, source).
+    store.replace_links_for_reporter(A, "neighbor_table", [
+        {"neighbor_eui64": B, "rssi_avg": -45},
+    ])
+    rows = store.list_links()
+    assert len(rows) == 1
+    assert rows[0]["rssi_avg"] == -45
+    # Different source coexists.
+    store.replace_links_for_reporter(A, "route_table", [
+        {"neighbor_eui64": C, "path_cost": 1},
+    ])
+    assert len(store.list_links()) == 2
+    assert len(store.list_links(source="route_table")) == 1
+
+
+def test_set_node_diagnostics(store: SQLiteStore) -> None:
+    A = "aa" * 8
+    store.upsert_node_metadata(eui64=A)
+    ok = store.set_node_diagnostics(
+        A, partition_id=1234, leader_router_id=0,
+        routing_role="leader", active_routers=3, channel=15, weighting=64,
+    )
+    assert ok is True
+    nodes = {n["eui64"]: n for n in store.list_nodes()}
+    assert nodes[A]["partition_id"] == 1234
+    assert nodes[A]["routing_role"] == "leader"
+    assert nodes[A]["channel"] == 15
+    assert nodes[A]["diag_updated_at"] is not None
