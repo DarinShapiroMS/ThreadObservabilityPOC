@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Thread Observability</title>
+<script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<style>
+  :root {
+    --bg:#0b1220; --panel:#111a2e; --panel2:#0f172a; --border:#1f2a44;
+    --fg:#e5e7eb; --muted:#94a3b8; --accent:#60a5fa;
+    --good:#16a34a; --warn:#ca8a04; --bad:#dc2626;
+    --pill-bg:#1e293b;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--fg); margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { padding: 14px 20px; border-bottom: 1px solid var(--border); display:flex; align-items:center; gap:16px; }
+  header h1 { font-size: 18px; margin:0; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  header .spacer { flex:1; }
+  header .last-refresh { color: var(--muted); font-size: 11px; }
+
+  nav.tabs { display:flex; gap:2px; padding: 0 20px; border-bottom: 1px solid var(--border); background: var(--panel2); }
+  nav.tabs button {
+    background: transparent; color: var(--muted); border:0; padding: 10px 16px; cursor:pointer;
+    font-size: 13px; font-weight: 600; border-bottom: 2px solid transparent;
+  }
+  nav.tabs button:hover { color: var(--fg); }
+  nav.tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
+
+  main { padding: 16px 20px 40px; }
+  .tab-panel { display:none; }
+  .tab-panel.active { display:block; }
+
+  .grid { display:grid; gap:14px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-bottom: 14px; }
+  .card { background: var(--panel); border:1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .card h2 { font-size: 13px; margin:0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+  .card .big { font-size: 28px; font-weight: 700; }
+  .card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .card.full { grid-column: 1 / -1; }
+
+  .pill { display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--pill-bg); color: var(--fg); }
+  .pill.good { background:#052e16; color:#86efac; }
+  .pill.warn { background:#422006; color:#fde68a; }
+  .pill.bad  { background:#450a0a; color:#fca5a5; }
+  .pill.muted{ background:#1e293b; color:var(--muted); }
+  .muted { color: var(--muted); }
+  code { background: #0b1220; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+
+  table { width:100%; border-collapse: collapse; font-size: 13px; }
+  table th, table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+  table th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+  table tr:hover td { background: rgba(96,165,250,0.04); }
+
+  .rssi-good { color: var(--good); font-weight: 700; }
+  .rssi-warn { color: var(--warn); font-weight: 700; }
+  .rssi-bad  { color: var(--bad);  font-weight: 700; }
+
+  .role-leader { background:#450a0a; color:#fca5a5; }
+  .role-router { background:#172554; color:#93c5fd; }
+  .role-reed   { background:#042f2e; color:#5eead4; }
+  .role-fed    { background:#1f2937; color:#d1d5db; }
+  .role-sed    { background:#2e1065; color:#c4b5fd; }
+  .role-unknown{ background:#1e293b; color:#94a3b8; }
+
+  .parent-hint { display:block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+  .toolbar { display:flex; gap:10px; align-items:center; margin-bottom: 10px; }
+  .toolbar label { font-size: 12px; color: var(--muted); }
+
+  .legend { display:flex; gap:14px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-top: 8px; }
+  .legend .sw { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align: middle; }
+
+  #cy { height: 640px; background: var(--panel2); border:1px solid var(--border); border-radius: 10px; }
+
+  pre.log { background:#0b1220; border:1px solid var(--border); border-radius: 8px; padding: 10px; max-height: 320px; overflow:auto; font-size: 12px; color: #cbd5e1; }
+  details { background: var(--panel); border:1px solid var(--border); border-radius:8px; padding: 8px 12px; margin-bottom: 10px; }
+  details summary { cursor:pointer; font-weight: 600; }
+
+  .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Thread Observability</h1>
+  <span class="meta">v<span id="addon-version">…</span></span>
+  <span class="spacer"></span>
+  <span class="last-refresh">updated <span id="last-refresh">never</span></span>
+</header>
+
+<nav class="tabs">
+  <button data-tab="network" class="active">Network</button>
+  <button data-tab="graph">Graph</button>
+  <button data-tab="diagnostics">Diagnostics</button>
+</nav>
+
+<main>
+  <section id="tab-network" class="tab-panel active">
+    <div class="grid">
+      <div class="card">
+        <h2>Thread Health</h2>
+        <div class="big" id="health-score">—</div>
+        <div class="sub" id="health-sub">computing…</div>
+      </div>
+      <div class="card">
+        <h2>Partitions</h2>
+        <div class="big" id="partition-count">—</div>
+        <div class="sub" id="partition-sub">—</div>
+      </div>
+      <div class="card">
+        <h2>Active Nodes</h2>
+        <div class="big" id="node-count">—</div>
+        <div class="sub" id="node-sub">—</div>
+      </div>
+      <div class="card">
+        <h2>Phantom Nodes</h2>
+        <div class="big" id="phantom-count">—</div>
+        <div class="sub muted">not seen in any router's tables &gt; 24 h</div>
+      </div>
+    </div>
+
+    <div class="card full" id="issues-card">
+      <h2>Active Issues</h2>
+      <div id="issues-body"><div class="empty">No issues.</div></div>
+    </div>
+
+    <div class="card full">
+      <h2>Partitions</h2>
+      <div id="partitions-body"><div class="empty">no data</div></div>
+    </div>
+
+    <div class="card full">
+      <div class="toolbar">
+        <h2 style="margin:0; flex:1;">Thread Nodes</h2>
+        <label><input type="checkbox" id="show-phantoms"> show phantoms</label>
+      </div>
+      <div style="overflow-x:auto;">
+        <table id="nodes-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Role</th>
+              <th>RSSI</th>
+              <th>LQI</th>
+              <th>Status</th>
+              <th>Last seen</th>
+              <th>EUI64</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--good)"></span>RSSI ≥ −70 dBm (solid)</span>
+        <span><span class="sw" style="background:var(--warn)"></span>−70 to −85 dBm (marginal)</span>
+        <span><span class="sw" style="background:var(--bad)"></span>&lt; −85 dBm (poor)</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-graph" class="tab-panel">
+    <div class="card full">
+      <div class="toolbar">
+        <h2 style="margin:0; flex:1;">Network Graph</h2>
+        <label><input type="checkbox" id="graph-show-phantoms"> show phantoms</label>
+        <button id="graph-relayout">Re-layout</button>
+      </div>
+      <div id="cy"></div>
+      <div class="legend">
+        <span><span class="sw" style="background:#dc2626"></span>Leader</span>
+        <span><span class="sw" style="background:#3b82f6"></span>Router</span>
+        <span><span class="sw" style="background:#14b8a6"></span>REED</span>
+        <span><span class="sw" style="background:#9ca3af"></span>End device (FED)</span>
+        <span><span class="sw" style="background:#8b5cf6"></span>Sleepy end device</span>
+        <span><span class="sw" style="background:#475569"></span>Phantom</span>
+        <span>·</span>
+        <span><span class="sw" style="background:var(--good)"></span>RSSI ≥ −70</span>
+        <span><span class="sw" style="background:var(--warn)"></span>−70..−85</span>
+        <span><span class="sw" style="background:var(--bad)"></span>&lt; −85</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-diagnostics" class="tab-panel">
+    <div class="grid">
+      <div class="card">
+        <h2>Add-on</h2>
+        <div id="supervisor-body" class="muted">…</div>
+      </div>
+      <div class="card">
+        <h2>Storage (SQLite)</h2>
+        <div id="storage-body" class="muted">…</div>
+      </div>
+      <div class="card">
+        <h2>Timeseries</h2>
+        <div id="ts-body" class="muted">…</div>
+      </div>
+      <div class="card">
+        <h2>OTBR Ingestion</h2>
+        <div id="ingest-body" class="muted">…</div>
+      </div>
+    </div>
+
+    <details>
+      <summary>Recent logs</summary>
+      <pre class="log" id="logs-body">…</pre>
+    </details>
+
+    <details>
+      <summary>Endpoints</summary>
+      <ul style="font-size:12px; line-height:1.7;">
+        <li><code>GET /v1/health/snapshot</code></li>
+        <li><code>GET /v1/issues/active</code></li>
+        <li><code>GET /v1/topology?include_phantoms=</code></li>
+        <li><code>GET /v1/partitions?include_phantoms=</code></li>
+        <li><code>GET /v1/phantoms</code></li>
+        <li><code>GET /v1/dev/status?include_phantoms=</code></li>
+        <li><code>GET /v1/ingest/state</code></li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>Raw config (token redacted)</summary>
+      <pre class="log" id="config-body">…</pre>
+    </details>
+  </section>
+</main>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+const el = (tag, attrs={}, ...children) => {
+  const e = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs)) {
+    if (k === 'class') e.className = v;
+    else if (k === 'html') e.innerHTML = v;
+    else e.setAttribute(k, v);
+  }
+  for (const c of children) {
+    if (c == null) continue;
+    e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  }
+  return e;
+};
+async function fetchJSON(path) {
+  const r = await fetch(path, { headers: { 'Accept': 'application/json' }});
+  if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+  return r.json();
+}
+function fmtAge(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  const s = (Date.now() - d.getTime()) / 1000;
+  if (s < 60) return Math.round(s) + 's ago';
+  if (s < 3600) return Math.round(s/60) + 'm ago';
+  if (s < 86400) return Math.round(s/3600) + 'h ago';
+  return Math.round(s/86400) + 'd ago';
+}
+function rssiClass(dbm) {
+  if (dbm == null) return '';
+  if (dbm >= -70) return 'rssi-good';
+  if (dbm >= -85) return 'rssi-warn';
+  return 'rssi-bad';
+}
+function roleBadge(node) {
+  const k = node.device_kind || 'unknown';
+  const isLeader = node.routing_role === 'leader';
+  const label = isLeader ? 'Leader' : ({
+    router: 'Router', reed: 'REED', fed: 'End device', sed: 'Sleepy end', unknown: '—',
+  })[k] || '—';
+  const cls = isLeader ? 'role-leader' : ('role-' + k);
+  return '<span class="pill ' + cls + '">' + label + '</span>';
+}
+function roleColorForGraph(node) {
+  if (node.is_phantom) return '#475569';
+  if (node.routing_role === 'leader') return '#dc2626';
+  switch (node.device_kind) {
+    case 'router': return '#3b82f6';
+    case 'reed':   return '#14b8a6';
+    case 'fed':    return '#9ca3af';
+    case 'sed':    return '#8b5cf6';
+    default:       return '#64748b';
+  }
+}
+function rssiEdgeColor(rssi) {
+  if (rssi == null) return '#475569';
+  if (rssi >= -70) return '#16a34a';
+  if (rssi >= -85) return '#ca8a04';
+  return '#dc2626';
+}
+
+document.querySelectorAll('nav.tabs button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('nav.tabs button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'graph') renderGraph();
+  });
+});
+
+let lastStatus = null;
+
+function renderNetwork(s) {
+  const h = s.health || {};
+  $('#health-score').textContent = (h.score != null) ? h.score : '—';
+  $('#health-sub').textContent = (h.status || 'unknown') + ' · ' + ((h.issues_active||0) + ' issues');
+
+  const p = s.partitions || {};
+  $('#partition-count').textContent = p.partition_count != null ? p.partition_count : '—';
+  $('#partition-sub').textContent = (p.partition_count > 1) ? 'network is split' : 'single partition';
+
+  const nodes = s.all_nodes || [];
+  const alive = nodes.filter(n => !n.is_phantom).length;
+  $('#node-count').textContent = alive;
+  $('#node-sub').textContent = nodes.length + ' total (incl. phantoms)';
+
+  const phantoms = (s.phantoms && s.phantoms.phantoms) || [];
+  $('#phantom-count').textContent = phantoms.length;
+
+  const issuesBody = $('#issues-body');
+  issuesBody.innerHTML = '';
+  const issues = (s.issues && s.issues.issues) || [];
+  if (!issues.length) issuesBody.appendChild(el('div', {class:'empty'}, 'No active issues.'));
+  else {
+    const list = el('ul', {style: 'margin:0; padding-left: 18px;'});
+    for (const i of issues) {
+      const sev = i.severity || 'info';
+      const pillCls = (sev === 'critical' || sev === 'error') ? 'bad' : ((sev === 'warn' || sev === 'warning') ? 'warn' : 'muted');
+      list.appendChild(el('li', {html: '<span class="pill ' + pillCls + '">' + sev + '</span> ' + (i.kind || i.code || '') + ' <span class="muted">' + (i.detail || '') + '</span>'}));
+    }
+    issuesBody.appendChild(list);
+  }
+
+  const pBody = $('#partitions-body');
+  pBody.innerHTML = '';
+  const parts = p.partitions || [];
+  if (!parts.length) pBody.appendChild(el('div', {class:'empty'}, 'No partitions discovered.'));
+  else {
+    const ul = el('ul', {style:'margin:0; padding-left:18px;'});
+    for (const pp of parts) {
+      const lead = pp.leader_eui64 ? '<code>' + pp.leader_eui64.slice(-4).toUpperCase() + '</code>' : '<span class="muted">no leader</span>';
+      ul.appendChild(el('li', {html:
+        '<code>' + pp.partition_id + '</code> · leader ' + lead +
+        ' · ' + (pp.node_count || 0) + ' nodes'
+      }));
+    }
+    pBody.appendChild(ul);
+  }
+
+  renderNodesTable(nodes);
+}
+
+function renderNodesTable(nodes) {
+  const showPhantoms = $('#show-phantoms').checked;
+  const tbody = $('#nodes-table tbody');
+  tbody.innerHTML = '';
+  const sorted = [...nodes].sort((a,b) => {
+    const ap = a.is_phantom ? 1 : 0, bp = b.is_phantom ? 1 : 0;
+    if (ap !== bp) return ap - bp;
+    return (a.display_name || '').localeCompare(b.display_name || '');
+  });
+  for (const n of sorted) {
+    if (n.is_phantom && !showPhantoms) continue;
+    const sig = n.signal_strength || {};
+    const rssi = sig.rssi;
+    const lqi  = sig.lqi;
+    const tr = el('tr');
+    const nameCell = el('td', {html:
+      (n.display_name || '<span class="muted">unnamed</span>') +
+      (n.is_phantom ? ' <span class="pill warn">phantom</span>' : '')
+    });
+    const roleCell = el('td');
+    let roleHtml = roleBadge(n);
+    if ((n.device_kind === 'sed' || n.device_kind === 'fed') && n.parent_name) {
+      roleHtml += '<span class="parent-hint">via ' + n.parent_name + '</span>';
+    } else if ((n.device_kind === 'sed' || n.device_kind === 'fed') && n.parent_eui64) {
+      roleHtml += '<span class="parent-hint">via ' + n.parent_eui64.slice(-4).toUpperCase() + '</span>';
+    }
+    roleCell.innerHTML = roleHtml;
+    const rssiCell = el('td', {class: rssiClass(rssi)}, rssi == null ? '—' : (rssi + ' dBm'));
+    const lqiCell = el('td', {}, lqi == null ? '—' : String(lqi));
+    const statusCls = n.status === 'online' ? 'good' : (n.status === 'offline' ? 'bad' : 'muted');
+    const statusCell = el('td', {html: '<span class="pill ' + statusCls + '">' + (n.status || '—') + '</span>'});
+    const seenCell = el('td', {}, fmtAge(n.last_seen));
+    const euiCell = el('td', {html: n.eui64 ? '<code>' + n.eui64.slice(-6).toUpperCase() + '</code>' : '<span class="muted">—</span>'});
+    tr.append(nameCell, roleCell, rssiCell, lqiCell, statusCell, seenCell, euiCell);
+    tbody.appendChild(tr);
+  }
+}
+
+function renderDiagnostics(s) {
+  const sup = s.supervisor || {};
+  $('#supervisor-body').innerHTML =
+    'state: <code>' + (sup.state || '—') + '</code><br>' +
+    'version: <code>' + (sup.version || '—') + '</code><br>' +
+    'latest: <code>' + (sup.version_latest || '—') + '</code>';
+
+  const st = s.storage || {};
+  $('#storage-body').innerHTML =
+    (st.nodes || 0) + ' nodes · ' + (st.links || 0) + ' links<br>' +
+    (st.events || 0) + ' events · ' + (st.issues_active || 0) + ' active issues<br>' +
+    '<span class="muted">' + (st.db_path || '') + '</span>';
+
+  const ts = s.timeseries || {};
+  $('#ts-body').innerHTML =
+    'backend: <code>' + (ts.backend || 'unknown') + '</code><br>' +
+    'ok: <span class="pill ' + (ts.ok ? 'good' : 'muted') + '">' + (ts.ok ? 'yes' : 'no') + '</span>';
+
+  const ing = s.ingestion || {};
+  $('#ingest-body').innerHTML =
+    'last run: ' + fmtAge(ing.last_run_at) + '<br>' +
+    'last status: <code>' + (ing.last_status || '—') + '</code><br>' +
+    'candidates: ' + (ing.candidate_count != null ? ing.candidate_count : '—');
+
+  $('#logs-body').textContent = (s.recent_logs || []).join('\n') || '(no log file yet)';
+  $('#config-body').textContent = JSON.stringify(s.config || {}, null, 2);
+}
+
+let cy = null;
+let graphInitErr = false;
+
+async function renderGraph() {
+  const showP = $('#graph-show-phantoms').checked;
+  let topo;
+  try {
+    topo = await fetchJSON('v1/topology?include_phantoms=' + (showP ? '1' : '0'));
+  } catch (e) {
+    document.getElementById('cy').textContent = 'Failed to load topology: ' + e.message;
+    return;
+  }
+  if (typeof cytoscape === 'undefined') {
+    if (!graphInitErr) {
+      graphInitErr = true;
+      document.getElementById('cy').innerHTML = '<div style="padding:20px;color:var(--muted)">cytoscape.js CDN unreachable — graph view unavailable in this environment.</div>';
+    }
+    return;
+  }
+
+  const elements = [];
+  for (const n of (topo.nodes || [])) {
+    elements.push({ data: {
+      id: n.eui64,
+      label: (n.display_name || n.friendly_name || (n.eui64 || '').slice(-4).toUpperCase()),
+      color: roleColorForGraph(n),
+    }});
+  }
+  for (const l of (topo.links || [])) {
+    if (!l.from || !l.to) continue;
+    elements.push({ data: {
+      id: l.from + '->' + l.to + '#' + (l.source || ''),
+      source: l.from,
+      target: l.to,
+      color: rssiEdgeColor(l.rssi_avg != null ? l.rssi_avg : l.rssi),
+    }});
+  }
+
+  if (cy) { cy.destroy(); cy = null; }
+  cy = cytoscape({
+    container: document.getElementById('cy'),
+    elements,
+    style: [
+      { selector: 'node', style: {
+        'background-color': 'data(color)',
+        'label': 'data(label)',
+        'color': '#e5e7eb', 'font-size': 10,
+        'text-valign': 'bottom', 'text-margin-y': 6,
+        'width': 24, 'height': 24, 'border-width': 1, 'border-color': '#0b1220',
+      }},
+      { selector: 'edge', style: {
+        'line-color': 'data(color)', 'width': 2,
+        'curve-style': 'bezier', 'opacity': 0.75,
+        'target-arrow-shape': 'triangle', 'target-arrow-color': 'data(color)',
+      }},
+    ],
+    layout: { name: 'cose', animate: false, idealEdgeLength: 90, nodeRepulsion: 6000 },
+    wheelSensitivity: 0.2,
+  });
+}
+
+$('#graph-show-phantoms').addEventListener('change', renderGraph);
+$('#graph-relayout').addEventListener('click', () => { if (cy) cy.layout({name:'cose', animate:false}).run(); });
+$('#show-phantoms').addEventListener('change', () => { if (lastStatus) renderNodesTable(lastStatus.all_nodes || []); });
+
+async function refresh() {
+  try {
+    const includeP = $('#show-phantoms').checked || $('#graph-show-phantoms').checked;
+    const s = await fetchJSON('v1/dev/status?include_phantoms=' + (includeP ? '1' : '0'));
+    lastStatus = s;
+    $('#addon-version').textContent = s.addon_version || '—';
+    $('#last-refresh').textContent = new Date().toLocaleTimeString();
+    renderNetwork(s);
+    renderDiagnostics(s);
+    if (document.getElementById('tab-graph').classList.contains('active')) renderGraph();
+  } catch (e) {
+    $('#last-refresh').textContent = 'error: ' + e.message;
+  }
+}
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>

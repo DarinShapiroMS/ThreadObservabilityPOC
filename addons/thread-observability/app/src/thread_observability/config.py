@@ -34,6 +34,8 @@ class SchedulerConfig(BaseModel):
     ingestion_interval_seconds: int = Field(default=10, ge=5, le=60)
     topology_recompute_seconds: int = Field(default=30, ge=10, le=120)
     metadata_refresh_seconds: int = Field(default=900, ge=60, le=3600)
+    discover_interval_seconds: int = Field(default=300, ge=60, le=3600)
+    reasoner_interval_seconds: int = Field(default=120, ge=30, le=3600)
 
 
 class InfluxConfig(BaseModel):

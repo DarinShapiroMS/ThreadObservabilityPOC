@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.22 — Tabbed dashboard, RSSI color coding, role/parent enrichment, network graph
+
+- **Tabbed dashboard** (`Network` / `Graph` / `Diagnostics`). The Network tab focuses on Thread node data + partitions + active issues; Diagnostics gathers supervisor, storage, timeseries, OTBR ingestion, recent logs, raw config; Graph hosts the topology visualization
+- **RSSI color coding**: green ≥ −70 dBm (solid), yellow −70 to −85 dBm (marginal), red < −85 dBm (poor). Legend rendered under the table
+- **Role / parent enrichment**: `list_nodes_enriched` now exposes `routing_role` (raw Matter RoutingRole), `device_kind` (`router` / `reed` / `fed` / `sed` / `unknown`), `parent_eui64` and `parent_name`. Sleepy / end devices show a `via <router>` caption under the role badge so the user can see which router a SED last attached to
+- **Network graph** (Cytoscape.js via CDN) — nodes colored by role (leader red, router blue, REED teal, FED grey, SED purple, phantom slate), edges colored by RSSI bin matching the table. `show phantoms` toggle and `Re-layout` button
+- **No user-initiated actions in UI** — discovery, reasoner and OTBR ingestion all run on a background scheduler now. The lifespan task spawns `matter-discovery-loop` (every `discover_interval_seconds`, default 300) and `reasoner-loop` (every `reasoner_interval_seconds`, default 120) alongside the existing OTBR ingest loop. The corresponding POST endpoints remain for debugging via MCP / curl
+- Dashboard HTML moved out of the Python file into `api/dashboard.html` (loaded once at import). Shipped through `setuptools.package-data`
+
 ## 0.9.21 — Dashboard UI for phantoms + partitions, RSSI from links, drop seed/demo
 
 - **RSSI/LQI now populates** in the Thread Nodes table. `get_latest_signal_strength` now reads from the Matter cluster-53 `links` table (per-router NeighborTable `rssi_avg` / `lqi_in`), picking the strongest incoming edge, with event-log fallback

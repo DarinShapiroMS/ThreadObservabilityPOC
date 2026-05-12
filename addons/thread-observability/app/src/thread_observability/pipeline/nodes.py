@@ -125,28 +125,70 @@ def get_node_summary(
     return summary
 
 
+_ROUTING_ROLE_TO_KIND: dict[str | None, str] = {
+    "leader": "router",
+    "router": "router",
+    "reed": "router",          # router-eligible end device — mains-powered
+    "end_device": "fed",        # full thread device — mains, doesn't route
+    "sleepy_end_device": "sed",
+    "unassigned": "unknown",
+    "unspecified": "unknown",
+}
+
+
+def classify_device_kind(routing_role: str | None) -> str:
+    """Bucket a Matter routing_role into a UI-friendly device kind.
+
+    - ``router``: mains-powered, participates in mesh routing (router/leader/reed)
+    - ``fed``: full thread end device — mains, non-routing
+    - ``sed``: sleepy end device — battery-powered
+    - ``unknown``: not yet classified
+    """
+    return _ROUTING_ROLE_TO_KIND.get(routing_role, "unknown")
+
+
+def _build_parent_map(s: SQLiteStore) -> dict[str, str]:
+    """For every neighbor with ``is_child=1`` in any link row, record the
+    reporter as that neighbor's parent. Returns ``{child_eui: parent_eui}``.
+    """
+    with s._lock:  # noqa: SLF001
+        rows = s._conn.execute(  # noqa: SLF001
+            "SELECT reporter_eui64, neighbor_eui64 FROM links"
+            " WHERE is_child = 1 AND source = 'neighbor_table'"
+        ).fetchall()
+    return {r["neighbor_eui64"]: r["reporter_eui64"] for r in rows if r["neighbor_eui64"]}
+
+
 def list_nodes_enriched(
     store: SQLiteStore | None = None,
     include_signal_strength: bool = False,
     include_phantoms: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return all nodes with enrichment (status, display_name).
+    """Return all nodes with enrichment (status, display_name, device kind,
+    parent router for sleepy/end devices).
 
     By default phantom nodes are excluded. Pass ``include_phantoms=True``
     to surface them (each row carries ``is_phantom``).
     """
     s = store or get_store()
     nodes = s.list_nodes()
+    parent_map = _build_parent_map(s)
+    name_by_eui = {n["eui64"]: (n.get("friendly_name") or get_node_display_name(n))
+                   for n in nodes if n.get("eui64")}
     out: list[dict[str, Any]] = []
     for node in nodes:
         if not include_phantoms and node.get("is_phantom"):
             continue
         eui = node.get("eui64")
+        routing_role = node.get("routing_role")
+        parent_eui = parent_map.get(eui) if eui else None
         summary: dict[str, Any] = {
             "eui64": eui,
             "friendly_name": node.get("friendly_name"),
             "display_name": get_node_display_name(node),
             "role": node.get("role"),
+            "routing_role": routing_role,
+            "device_kind": classify_device_kind(routing_role),
             "area": node.get("area"),
             "device_id": node.get("device_id"),
             "first_seen": node.get("first_seen"),
@@ -154,6 +196,9 @@ def list_nodes_enriched(
             "status": infer_node_status(node),
             "is_phantom": bool(node.get("is_phantom")),
             "last_referenced_at": node.get("last_referenced_at"),
+            "partition_id": node.get("partition_id"),
+            "parent_eui64": parent_eui,
+            "parent_name": name_by_eui.get(parent_eui) if parent_eui else None,
         }
         if include_signal_strength and eui:
             summary["signal_strength"] = get_latest_signal_strength(eui, store=s)
