@@ -36,6 +36,7 @@ class SchedulerConfig(BaseModel):
     metadata_refresh_seconds: int = Field(default=900, ge=60, le=3600)
     discover_interval_seconds: int = Field(default=300, ge=60, le=3600)
     reasoner_interval_seconds: int = Field(default=120, ge=30, le=3600)
+    otbr_rest_interval_seconds: int = Field(default=60, ge=15, le=3600)
 
 
 class InfluxConfig(BaseModel):

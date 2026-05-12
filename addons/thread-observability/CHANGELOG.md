@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.27 — OTBR ingestion (border router now appears in the table)
+
+- Added `pipeline/otbr_rest.py`: a new scheduled loop (default 60s) that fetches the HA OTBR add-on's REST `/node` endpoint and upserts the Thread Border Router as a first-class node in our store. Captures ExtAddress (EUI64), State (→ routing_role), PartitionId, LeaderRouterId, Weighting, and NumOfRouter.
+- Probes multiple candidate base URLs (env override → Supervisor proxy → direct container hostnames) and caches whichever responds, so the same code works across HA OTBR add-on versions. Failures are logged at debug and the loop keeps trying.
+- A user-set friendly name on the OTBR row is preserved on subsequent ingest cycles — we only fill in `Thread Border Router` if no name has been set yet.
+- New config option `scheduler.otbr_rest_interval_seconds` (default 60, range 15–3600).
+- This is the foundation for the next-hop / path-to-OTBR view: once the OTBR is a known node, every router's existing RouteTable entries can be resolved to a named target, and we can highlight `from → next-hop → … → OTBR` traversals in the graph. Route-table aggregation via `/diagnostics` is queued for 0.9.28.
+
 ## 0.9.26 — Leader is control-plane only (label clarified)
 
 - The Thread partition **Leader** is a control-plane coordinator (assigns Router IDs, maintains Network Data) — it is **not** a forwarding hop. Packets do not have to traverse the Leader; each router picks its own next-hop per destination via its RouteTable.

@@ -22,6 +22,7 @@ from ..health import build_health_snapshot
 from ..pipeline import device_discovery
 from ..pipeline import nodes as nodes_mod
 from ..pipeline import otbr_adapter
+from ..pipeline import otbr_rest
 from ..pipeline import reasoner as reasoner_mod
 from ..pipeline import topology as topology_mod
 from ..storage import influx_store as ts_store
@@ -96,11 +97,16 @@ async def _lifespan(app: FastAPI):
     ingest_interval = int(getattr(cfg.scheduler, "ingestion_interval_seconds", 10))
     discover_interval = int(getattr(cfg.scheduler, "discover_interval_seconds", 300))
     reasoner_interval = int(getattr(cfg.scheduler, "reasoner_interval_seconds", 120))
+    otbr_rest_interval = int(getattr(cfg.scheduler, "otbr_rest_interval_seconds", 60))
 
     tasks = [
         asyncio.create_task(
             otbr_adapter.run_forever(interval_seconds=ingest_interval),
             name="otbr-ingest-loop",
+        ),
+        asyncio.create_task(
+            otbr_rest.run_forever(interval_seconds=otbr_rest_interval),
+            name="otbr-rest-loop",
         ),
         asyncio.create_task(
             _periodic("matter-discovery", discover_interval, device_discovery.discover_and_sync),
@@ -116,8 +122,8 @@ async def _lifespan(app: FastAPI):
         ),
     ]
     log.info(
-        "scheduler started: ingest=%ss discover=%ss reasoner=%ss",
-        ingest_interval, discover_interval, reasoner_interval,
+        "scheduler started: ingest=%ss otbr_rest=%ss discover=%ss reasoner=%ss",
+        ingest_interval, otbr_rest_interval, discover_interval, reasoner_interval,
     )
     try:
         yield
