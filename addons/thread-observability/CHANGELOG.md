@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.23 — Role column shows partition / peers / parent for every node, LQI legend
+
+- **Role column is now meaningful for routers too.** Thread routers are peers in a mesh, not children of a parent — so the dashboard now shows partition id, peer count and (for non-leaders) the partition leader instead of leaving the caption blank. Sleepy/end devices keep the `via <router>` caption.
+- **`list_nodes_enriched` enriched** with `partition_leader_eui64`, `partition_leader_name`, `router_peer_count`.
+- **LQI explainer** added under the Thread Nodes table: Link Quality Indicator, 0–255 (higher = better); ≥ 200 excellent, 100–200 workable, < 100 degraded. Column headers also carry tooltips.
+
 ## 0.9.22 — Tabbed dashboard, RSSI color coding, role/parent enrichment, network graph
 
 - **Tabbed dashboard** (`Network` / `Graph` / `Diagnostics`). The Network tab focuses on Thread node data + partitions + active issues; Diagnostics gathers supervisor, storage, timeseries, OTBR ingestion, recent logs, raw config; Graph hosts the topology visualization

@@ -159,22 +159,41 @@ def _build_parent_map(s: SQLiteStore) -> dict[str, str]:
     return {r["neighbor_eui64"]: r["reporter_eui64"] for r in rows if r["neighbor_eui64"]}
 
 
+def _build_router_peer_counts(s: SQLiteStore) -> dict[str, int]:
+    """Count distinct router peers each reporter sees (is_child=0).
+
+    Used to annotate router/leader rows with how many other routers they are
+    directly meshed with in the partition.
+    """
+    with s._lock:  # noqa: SLF001
+        rows = s._conn.execute(  # noqa: SLF001
+            "SELECT reporter_eui64, COUNT(DISTINCT neighbor_eui64) AS n"
+            "  FROM links"
+            " WHERE source = 'neighbor_table' AND (is_child = 0 OR is_child IS NULL)"
+            " GROUP BY reporter_eui64"
+        ).fetchall()
+    return {r["reporter_eui64"]: int(r["n"]) for r in rows if r["reporter_eui64"]}
+
+
 def list_nodes_enriched(
     store: SQLiteStore | None = None,
     include_signal_strength: bool = False,
     include_phantoms: bool = False,
 ) -> list[dict[str, Any]]:
     """Return all nodes with enrichment (status, display_name, device kind,
-    parent router for sleepy/end devices).
-
-    By default phantom nodes are excluded. Pass ``include_phantoms=True``
-    to surface them (each row carries ``is_phantom``).
+    parent router for sleepy/end devices, partition + peer count for routers).
     """
     s = store or get_store()
     nodes = s.list_nodes()
     parent_map = _build_parent_map(s)
+    peer_counts = _build_router_peer_counts(s)
     name_by_eui = {n["eui64"]: (n.get("friendly_name") or get_node_display_name(n))
                    for n in nodes if n.get("eui64")}
+    # Map partition_id -> leader EUI by scanning nodes for routing_role == 'leader'
+    leader_by_partition: dict[Any, str] = {}
+    for n in nodes:
+        if n.get("routing_role") == "leader" and n.get("partition_id") is not None and n.get("eui64"):
+            leader_by_partition[n["partition_id"]] = n["eui64"]
     out: list[dict[str, Any]] = []
     for node in nodes:
         if not include_phantoms and node.get("is_phantom"):
@@ -182,6 +201,8 @@ def list_nodes_enriched(
         eui = node.get("eui64")
         routing_role = node.get("routing_role")
         parent_eui = parent_map.get(eui) if eui else None
+        partition_id = node.get("partition_id")
+        leader_eui = leader_by_partition.get(partition_id) if partition_id is not None else None
         summary: dict[str, Any] = {
             "eui64": eui,
             "friendly_name": node.get("friendly_name"),
@@ -196,7 +217,10 @@ def list_nodes_enriched(
             "status": infer_node_status(node),
             "is_phantom": bool(node.get("is_phantom")),
             "last_referenced_at": node.get("last_referenced_at"),
-            "partition_id": node.get("partition_id"),
+            "partition_id": partition_id,
+            "partition_leader_eui64": leader_eui,
+            "partition_leader_name": name_by_eui.get(leader_eui) if leader_eui else None,
+            "router_peer_count": peer_counts.get(eui, 0) if eui else 0,
             "parent_eui64": parent_eui,
             "parent_name": name_by_eui.get(parent_eui) if parent_eui else None,
         }

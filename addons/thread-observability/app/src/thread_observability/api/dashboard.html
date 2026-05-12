@@ -140,8 +140,8 @@
             <tr>
               <th>Name</th>
               <th>Role</th>
-              <th>RSSI</th>
-              <th>LQI</th>
+              <th title="Received Signal Strength Indicator — higher (less negative) dBm is stronger">RSSI</th>
+              <th title="Link Quality Indicator — neighbor router's estimate of receive quality from this node, 0–255 higher = better">LQI</th>
               <th>Status</th>
               <th>Last seen</th>
               <th>EUI64</th>
@@ -151,9 +151,20 @@
         </table>
       </div>
       <div class="legend">
-        <span><span class="sw" style="background:var(--good)"></span>RSSI ≥ −70 dBm (solid)</span>
-        <span><span class="sw" style="background:var(--warn)"></span>−70 to −85 dBm (marginal)</span>
-        <span><span class="sw" style="background:var(--bad)"></span>&lt; −85 dBm (poor)</span>
+        <span><b>RSSI</b> (received signal strength, dBm — higher = stronger):</span>
+        <span><span class="sw" style="background:var(--good)"></span>≥ −70 (solid)</span>
+        <span><span class="sw" style="background:var(--warn)"></span>−70 to −85 (marginal)</span>
+        <span><span class="sw" style="background:var(--bad)"></span>&lt; −85 (poor)</span>
+      </div>
+      <div class="legend" style="margin-top:4px;">
+        <span><b>LQI</b> (link quality indicator, 0–255 — higher = better):
+        the router's estimate of how reliably it decodes packets from this
+        neighbor. ≥ 200 is excellent, 100–200 is workable, &lt; 100 is degraded.</span>
+      </div>
+      <div class="legend" style="margin-top:4px;">
+        <span><b>Role:</b> Leader = partition root; Router/REED = mesh peer
+        (no parent — uses route table); End device / Sleepy end = attached to
+        one parent router (shown as <code>via …</code>).</span>
       </div>
     </div>
   </section>
@@ -371,10 +382,24 @@ function renderNodesTable(nodes) {
     });
     const roleCell = el('td');
     let roleHtml = roleBadge(n);
-    if ((n.device_kind === 'sed' || n.device_kind === 'fed') && n.parent_name) {
-      roleHtml += '<span class="parent-hint">via ' + n.parent_name + '</span>';
-    } else if ((n.device_kind === 'sed' || n.device_kind === 'fed') && n.parent_eui64) {
-      roleHtml += '<span class="parent-hint">via ' + n.parent_eui64.slice(-4).toUpperCase() + '</span>';
+    const partTag = (n.partition_id != null)
+      ? ('partition ' + String(n.partition_id).slice(-4))
+      : null;
+    if (n.device_kind === 'sed' || n.device_kind === 'fed') {
+      // End devices have one parent router.
+      const parent = n.parent_name || (n.parent_eui64 ? n.parent_eui64.slice(-4).toUpperCase() : null);
+      if (parent) roleHtml += '<span class="parent-hint">via ' + parent + '</span>';
+      else roleHtml += '<span class="parent-hint">no parent reported</span>';
+    } else if (n.routing_role === 'leader') {
+      // Leader is the root of its partition.
+      if (partTag) roleHtml += '<span class="parent-hint">' + partTag + ' · ' + (n.router_peer_count || 0) + ' router peers</span>';
+    } else if (n.device_kind === 'router') {
+      // Routers are peers in the mesh — show partition + peer count + leader.
+      const bits = [];
+      if (partTag) bits.push(partTag);
+      bits.push((n.router_peer_count || 0) + ' peers');
+      if (n.partition_leader_name && n.partition_leader_eui64 !== n.eui64) bits.push('leader: ' + n.partition_leader_name);
+      roleHtml += '<span class="parent-hint">' + bits.join(' · ') + '</span>';
     }
     roleCell.innerHTML = roleHtml;
     const rssiCell = el('td', {class: rssiClass(rssi)}, rssi == null ? '—' : (rssi + ' dBm'));
