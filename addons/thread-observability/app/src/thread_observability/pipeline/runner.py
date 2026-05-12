@@ -156,6 +156,14 @@ async def run_tick() -> dict[str, Any]:
         duration,
         ", ".join(f"{n}={s['duration_seconds']}s" for n, s in stages.items()),
     )
+    # Persist the tick for the temporal-honesty envelope (Phase 1).
+    # Best-effort: failures here must never propagate or break a tick.
+    try:
+        from ..storage.sqlite_store import get_store as _get_store2
+
+        _get_store2().record_pipeline_tick(get_runner_state())
+    except Exception:  # noqa: BLE001
+        log.exception("pipeline tick persistence failed (non-fatal)")
     return get_runner_state()
 
 

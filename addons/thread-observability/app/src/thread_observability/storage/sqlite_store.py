@@ -443,6 +443,26 @@ _MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_nodes_physical_identity
         ON nodes(vendor_id, product_id, serial_number);
     """,
+    # v18 (0.9.54 / Phase 1 temporal honesty): pipeline_ticks — one
+    # row per unified pipeline tick, recording when it ran, how long
+    # each stage took, and which stages succeeded vs. failed. Drives
+    # the ``meta.pipeline_tick`` block on every read-tool response so
+    # callers can see exactly how stale the SQLite-cached data is and
+    # which ingestion stage produced it (or which one failed).
+    """
+    CREATE TABLE IF NOT EXISTS pipeline_ticks (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at    TEXT NOT NULL,
+        completed_at  TEXT NOT NULL,
+        duration_s    REAL NOT NULL,
+        ok_count      INTEGER NOT NULL,
+        fail_count    INTEGER NOT NULL,
+        stages_json   TEXT NOT NULL,
+        error         TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pipeline_ticks_completed_at
+        ON pipeline_ticks(completed_at DESC);
+    """,
 ]
 
 
@@ -1128,6 +1148,69 @@ class SQLiteStore:
         else:
             d["snapshot"] = None
         return d
+
+    # -- pipeline_ticks (v18, Phase 1 temporal honesty) ---------------
+
+    def record_pipeline_tick(self, tick: dict[str, Any]) -> int:
+        """Persist a finished pipeline tick. Returns the new row id.
+
+        ``tick`` is the dict produced by ``pipeline.runner.run_tick`` /
+        ``get_runner_state``. Only the fields we care about are extracted;
+        unknown keys are ignored. The full per-stage dict is JSON-encoded
+        in ``stages_json`` so we can replay timings later without forcing
+        a schema migration every time we add a stage.
+        """
+        stages = tick.get("stages") or {}
+        ok_count = sum(1 for s in stages.values() if isinstance(s, dict) and s.get("ok"))
+        fail_count = sum(1 for s in stages.values() if isinstance(s, dict) and not s.get("ok"))
+        started_at = tick.get("started_at")
+        finished_at = tick.get("finished_at")
+
+        def _iso(v: Any) -> str:
+            if isinstance(v, (int, float)):
+                return datetime.fromtimestamp(v, tz=UTC).isoformat()
+            if isinstance(v, str):
+                return v
+            return _utc_now()
+
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO pipeline_ticks("
+                "started_at, completed_at, duration_s, ok_count, fail_count,"
+                " stages_json, error"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    _iso(started_at),
+                    _iso(finished_at),
+                    float(tick.get("duration_seconds") or 0.0),
+                    ok_count,
+                    fail_count,
+                    json.dumps(stages, default=str),
+                    tick.get("error"),
+                ),
+            )
+            return int(cur.lastrowid or 0)
+
+    def get_recent_pipeline_ticks(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return the most recent N pipeline ticks (newest first)."""
+        limit = max(1, min(int(limit), 1000))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, started_at, completed_at, duration_s,"
+                " ok_count, fail_count, stages_json, error"
+                " FROM pipeline_ticks ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            raw = d.pop("stages_json", None)
+            try:
+                d["stages"] = json.loads(raw) if raw else {}
+            except Exception:  # noqa: BLE001
+                d["stages"] = {"_raw": raw}
+            out.append(d)
+        return out
 
     # -- network data (v10) -------------------------------------------
 

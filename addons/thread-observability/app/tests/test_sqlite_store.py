@@ -8,9 +8,9 @@ from thread_observability.storage.sqlite_store import SQLiteStore
 
 
 def test_migrations_apply(store: SQLiteStore) -> None:
-    assert store.schema_version == 17
+    assert store.schema_version == 18
     stats = store.stats()
-    assert stats["schema_version"] == 17
+    assert stats["schema_version"] == 18
     assert stats["row_counts"]["events"] == 0
 
 
@@ -189,7 +189,7 @@ def test_reset_data_wipes_cache_tables_preserves_schema(store: SQLiteStore) -> N
     assert counts["events"] == 0
     assert counts["issues"] == 0
     # Schema migrations still recorded.
-    assert store.schema_version == 17
+    assert store.schema_version == 18
 
 def test_upsert_node_metadata_persists_ha_fields(store: SQLiteStore) -> None:
     eui = "cc" * 8

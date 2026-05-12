@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.9.54 — Phase 1: temporal-honesty envelope on read tools
+
+Read-only MCP tools now return `{"data": ..., "meta": {...}}` so callers
+can see at a glance how fresh the underlying SQLite-cached data is and
+which pipeline tick produced it. Write/mutating tools (`ha_restart_addon`,
+`ha_update_addon`, `close_issue`, etc.) pass through unchanged — their
+existing `{action, result, requested_at}` shapes are correct as-is.
+
+The `meta` block:
+
+```jsonc
+{
+  "tool": "list_all_nodes",
+  "as_of": "2026-05-12T19:23:45.123+00:00",
+  "data_source": "sqlite_cache",
+  "cache_age_s": 12.4,           // seconds since last pipeline tick finished
+  "stale_after_s": 60.0,         // 2x pipeline interval; older than this = suspect
+  "pipeline_tick": {
+    "tick_count": 4271,
+    "started_at": "...",
+    "finished_at": "...",
+    "duration_seconds": 3.8,
+    "current_stage": null,
+    "running": false,
+    "error": null
+  }
+}
+```
+
+**Schema v18: `pipeline_ticks` table.** Every completed pipeline tick is
+now persisted (id, started_at, completed_at, duration, per-stage JSON,
+ok/fail counts, error). Best-effort write — persistence failure never
+breaks a tick. Two new store methods: `record_pipeline_tick(tick)` and
+`get_recent_pipeline_ticks(limit=20)`.
+
+Wrapping happens at the dispatcher boundary (`_dispatch_and_wrap` in
+`mcp_tools.py`), not inside individual tool functions, so existing unit
+tests of those functions remain unchanged. Both transport layers — REST
+`/mcp/call/{tool_name}` and JSON-RPC `tools/call` — go through the
+wrapper.
+
+Backward-compat: hard cut, no shim. There are no external consumers of
+the old un-wrapped shape, so adding a layer of indirection would just be
+noise.
+
 ## 0.9.53 — `ha_update_addon` actually works (admin token + `update.install`)
 
 **The real fix.** After 0.9.49–0.9.52 each tested a different in-process

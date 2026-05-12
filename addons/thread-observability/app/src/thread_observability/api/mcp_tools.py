@@ -797,6 +797,111 @@ def _build_phantom_list() -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Phase 1 temporal-honesty envelope
+# ---------------------------------------------------------------------------
+
+# Read-only tools whose responses are wrapped in ``{data, meta}`` so callers
+# can see exactly when the underlying SQLite cache was last refreshed and
+# which pipeline tick produced it. Write/mutating tools are passed through
+# unwrapped because they already include their own "requested_at" /
+# "performed" / "action" fields and are not snapshots of cached state.
+_READ_TOOLS: frozenset[str] = frozenset({
+    "get_network_topology",
+    "get_partition_state",
+    "list_phantom_nodes",
+    "list_active_issues",
+    "get_health_snapshot",
+    "get_recent_logs",
+    "ha_get_addon_state",
+    "ha_get_addon_logs",
+    "ha_get_supervisor_logs",
+    "ha_check_for_update",
+    "list_thread_datasets",
+    "get_storage_stats",
+    "query_events",
+    "query_timeline",
+    "get_topology_snapshot",
+    "list_topology_snapshots",
+    "diff_topology",
+    "list_playbooks",
+    "lookup_playbook",
+    "analyze_node",
+    "get_node_flap_history",
+    "get_link_flap_history",
+    "get_config",
+    "get_timeseries_health",
+    "list_otbr_candidates",
+    "get_ingest_state",
+    "get_node_metadata",
+    "list_all_nodes",
+})
+
+
+def _meta(name: str) -> dict[str, Any]:
+    """Build the ``meta`` block describing freshness of a read response.
+
+    The block is intentionally small and serialisation-safe: just enough
+    for a caller to answer "is this data stale, and which tick produced it?".
+    """
+    from ..pipeline.runner import get_runner_state
+
+    state = get_runner_state()
+    finished_at = state.get("finished_at")
+    started_at = state.get("started_at")
+    interval = state.get("interval_seconds")
+
+    now_ts = datetime.now(tz=UTC).timestamp()
+    cache_age_s: float | None = None
+    if isinstance(finished_at, (int, float)):
+        cache_age_s = round(max(0.0, now_ts - float(finished_at)), 3)
+
+    def _iso(v: Any) -> str | None:
+        if isinstance(v, (int, float)):
+            return datetime.fromtimestamp(v, tz=UTC).isoformat()
+        if isinstance(v, str):
+            return v
+        return None
+
+    stale_after_s: float | None = None
+    if isinstance(interval, (int, float)):
+        # Heuristic: two pipeline intervals before we'd consider the
+        # cache stale (one missed tick is normal; two means trouble).
+        stale_after_s = float(interval) * 2.0
+
+    return {
+        "tool": name,
+        "as_of": _utc_now(),
+        "data_source": "sqlite_cache",
+        "cache_age_s": cache_age_s,
+        "stale_after_s": stale_after_s,
+        "pipeline_tick": {
+            "tick_count": state.get("tick_count"),
+            "started_at": _iso(started_at),
+            "finished_at": _iso(finished_at),
+            "duration_seconds": state.get("duration_seconds"),
+            "current_stage": state.get("current_stage"),
+            "running": state.get("running"),
+            "error": state.get("error"),
+        },
+    }
+
+
+async def _dispatch_and_wrap(
+    name: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """Dispatch a tool and wrap read responses in ``{data, meta}``.
+
+    Write/mutating tools (those NOT in ``_READ_TOOLS``) are returned
+    unchanged so existing ``{action, result, requested_at}`` shapes
+    surface untouched.
+    """
+    result = await _dispatch_tool(name, arguments)
+    if name not in _READ_TOOLS:
+        return result
+    return {"data": result, "meta": _meta(name)}
+
+
 async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Execute a tool and return its result payload."""
     if name == "get_network_topology":
@@ -1170,7 +1275,7 @@ def create_mcp_app() -> FastAPI:
     async def call_tool_rest(tool_name: str, request: ToolCallRequest) -> dict[str, object]:
         if tool_name not in _TOOL_MAP:
             raise HTTPException(status_code=404, detail=f"Unknown tool: {tool_name}")
-        result = await _dispatch_tool(tool_name, request.arguments)
+        result = await _dispatch_and_wrap(tool_name, request.arguments)
         return {"tool": tool_name, "result": result, "called_at": _utc_now()}
 
     # ── MCP JSON-RPC 2.0 endpoint (VS Code MCP client) ───────────────────────
@@ -1213,7 +1318,7 @@ def create_mcp_app() -> FastAPI:
             arguments = params.get("arguments", {})
             if tool_name not in _TOOL_MAP:
                 return err(-32602, f"Unknown tool: {tool_name}")
-            result = await _dispatch_tool(tool_name, arguments)
+            result = await _dispatch_and_wrap(tool_name, arguments)
             import json as _json
             return ok({"content": [{"type": "text", "text": _json.dumps(result, default=str)}]})
 
