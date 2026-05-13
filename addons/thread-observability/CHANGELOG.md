@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.10 — Better evidence gathering for node questions
+
+- **Node-specific retry.** When direct-model chat answers a node question with
+  only a shallow current-state view, the backend now retries once and requires
+  node-specific evidence plus recent history or topology context before it
+  accepts the answer.
+- **Focused coverage.** Added regression coverage for the node-question retry
+  path in the direct chat orchestration tests.
+
 ## 0.11.9 — Chat copy button and auto-tool-use retry
 
 - **Copy message button.** Each chat message in the dashboard now includes a

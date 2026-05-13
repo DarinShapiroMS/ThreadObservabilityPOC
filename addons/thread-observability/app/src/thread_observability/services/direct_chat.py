@@ -22,6 +22,7 @@ _DIRECT_AGENT_PREFIX = "direct:"
 _MAX_TOOL_ROUNDS = 4
 _MAX_TOOL_CALLS = 8
 _MAX_TOOL_DEFERRAL_RETRIES = 1
+_MAX_NODE_EVIDENCE_RETRIES = 1
 _DEFAULT_SYSTEM_PROMPT = (
     "You are the Thread Observability dashboard troubleshooting assistant. Answer using only the provided "
     "Thread dashboard context, the user's request, and the available diagnostic tools. "
@@ -282,6 +283,26 @@ def _looks_like_tool_deferral(text: str) -> bool:
     return any(tool_name in normalized for tool_name in ("get_mesh_state", "analyze_node", "get_counter_series", "query_history"))
 
 
+def _looks_like_node_question(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    return (
+        "tell me what is going on with node" in normalized
+        or "what is going on with node" in normalized
+        or "about node " in normalized
+        or " eui64" in normalized
+        or "eui-64" in normalized
+    )
+
+
+def _has_sufficient_node_evidence(tool_trace: list[dict[str, Any]]) -> bool:
+    names = {str(row.get("name") or "") for row in tool_trace}
+    if "analyze_node" not in names:
+        return False
+    return bool(names & {"query_history", "get_mesh_state", "start_triage", "list_all_nodes"})
+
+
 async def _dispatch_chat_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     from ..api import mcp_tools
 
@@ -324,7 +345,9 @@ async def direct_chat_turn(
     tool_trace: list[dict[str, Any]] = []
     tool_calls_used = 0
     tool_deferral_retries = 0
+    node_evidence_retries = 0
     final_text = ""
+    node_question = _looks_like_node_question(message)
 
     for _ in range(_MAX_TOOL_ROUNDS + 1):
         body = {
@@ -356,6 +379,20 @@ async def direct_chat_turn(
                         "content": (
                             "Do not tell me to use the available tools myself. Call the relevant tools now, then "
                             "answer from the observed results."
+                        ),
+                    }
+                )
+                continue
+            if node_question and node_evidence_retries < _MAX_NODE_EVIDENCE_RETRIES and not _has_sufficient_node_evidence(tool_trace):
+                node_evidence_retries += 1
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "This is a node-specific troubleshooting question. Before answering, gather node-specific "
+                            "and recent-change evidence yourself. Call analyze_node for the node, plus at least one "
+                            "history or topology tool such as query_history, get_mesh_state, or start_triage, then "
+                            "answer from those observed results."
                         ),
                     }
                 )

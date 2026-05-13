@@ -209,3 +209,103 @@ def test_direct_chat_turn_retries_once_when_model_defers_tool_use(monkeypatch) -
     assert result["response"]["text"] == "I checked the current health snapshot and found no active mesh-wide degradation."
     assert len(result["tool_calls"]) == 1
     assert result["tool_calls"][0]["name"] == "get_health_snapshot"
+
+
+def test_direct_chat_turn_retries_for_node_question_without_history_context(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "The node looks online and stable right now.",
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {"name": "analyze_node", "arguments": '{"eui64":"e6684b9903e8970f"}'},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 2:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "The node looks online and stable right now.",
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 3:
+            retry_message = next(
+                msg for msg in calls[2]["messages"]
+                if msg.get("role") == "user" and "node-specific troubleshooting question" in str(msg.get("content") or "")
+            )
+            assert retry_message["role"] == "user"
+            assert "node-specific troubleshooting question" in retry_message["content"]
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-2",
+                                    "type": "function",
+                                    "function": {"name": "query_history", "arguments": '{"eui64":"e6684b9903e8970f"}'},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        assert len(calls) == 4
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "The node is online now, but recent history shows a very recent change that matters for troubleshooting.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        if name == "analyze_node":
+            return {"data": {"node": {"eui64": arguments["eui64"]}}, "meta": {"tool": name}}
+        if name == "query_history":
+            return {"data": {"events": [{"event_type": "status_change"}]}, "meta": {"tool": name}}
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Tell me what is going on with node e6684b9903e8970f.",
+            rendered_message="User message: Tell me what is going on with node e6684b9903e8970f.",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == "The node is online now, but recent history shows a very recent change that matters for troubleshooting."
+    assert [row["name"] for row in result["tool_calls"]] == ["analyze_node", "query_history"]
