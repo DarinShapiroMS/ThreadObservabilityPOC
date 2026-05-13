@@ -214,6 +214,14 @@ def test_looks_like_tool_deferral_detects_punting_response() -> None:
     assert direct_chat._looks_like_tool_deferral(text) is True
 
 
+def test_looks_like_tool_deferral_detects_internal_service_recommendation() -> None:
+    text = (
+        "I would recommend calling the get_topology_history_entry function. "
+        "The user can query that internal data service directly to investigate further."
+    )
+    assert direct_chat._looks_like_tool_deferral(text) is True
+
+
 def test_direct_chat_turn_retries_once_when_model_defers_tool_use(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
@@ -288,6 +296,63 @@ def test_direct_chat_turn_retries_once_when_model_defers_tool_use(monkeypatch) -
     assert result["response"]["text"] == "I checked the current health snapshot and found no active mesh-wide degradation."
     assert len(result["tool_calls"]) == 1
     assert result["tool_calls"][0]["name"] == "get_health_snapshot"
+
+
+def test_direct_chat_turn_retries_when_model_tells_user_to_call_internal_service(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": (
+                                "I would recommend calling the get_topology_history_entry function directly. "
+                                "You can query that internal data service to investigate further."
+                            ),
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 2:
+            retry_message = calls[1]["messages"][-1]
+            assert retry_message["role"] == "user"
+            assert "Do not tell me to use the available tools myself" in retry_message["content"]
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "I checked the available evidence and the retained topology history is insufficient to answer that directly.",
+                        }
+                    }
+                ]
+            }
+        raise AssertionError(f"unexpected call count {len(calls)}")
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="When did the channel change?",
+            rendered_message="User message: When did the channel change?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == "I checked the available evidence and the retained topology history is insufficient to answer that directly."
+    assert result["tool_calls"] == []
 
 
 def test_direct_chat_turn_retries_for_node_question_without_history_context(monkeypatch) -> None:

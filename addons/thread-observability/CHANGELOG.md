@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.18 — Internal-tool-use prompt hardening
+
+- **Internal-service policy clarified.** Direct chat now explicitly treats MCP tools, functions, and internal data services as assistant-only capabilities rather than something the user can invoke directly.
+- **Broader tool-deferral retry detection.** The retry path now catches a wider range of tool-punting responses, including suggestions to call functions or query internal services, and asks the model to answer again from assistant-run evidence instead.
+- **Regression coverage.** Added focused tests covering internal-service recommendation detection and the retry path for those responses.
+
 ## 0.11.17 — Exact count answers and cleaner freshness wording
 
 - **Deterministic exact counts.** For chat prompts that explicitly ask for exact or specific counts, the backend now answers directly from tool results after gathering the requested values, instead of relying on the model to paraphrase them.

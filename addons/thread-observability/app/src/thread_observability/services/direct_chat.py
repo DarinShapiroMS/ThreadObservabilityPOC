@@ -32,7 +32,10 @@ _DEFAULT_SYSTEM_PROMPT = (
     "Thread dashboard context, the user's request, and the available diagnostic tools. "
     "Use tools when you need current mesh state, counters, history, or node-specific evidence. "
     "Do not tell the user to run the available diagnostic tools themselves. If a relevant tool exists, call it "
-    "yourself before answering. "
+    "yourself before answering. The user does not have direct access to MCP tools, functions, or internal data "
+    "services. Never tell the user to call, query, check, inspect, or use those services directly; do that "
+    "yourself when possible. Ask the user only for information they uniquely have or for a physical/manual action "
+    "you cannot perform from the dashboard. "
     "Use web_search only when outside product or protocol context is actually needed. "
     "Prefer a node's friendly/display name when present; on first mention include its EUI64 only when that helps "
     "disambiguate. Ground conclusions in tool output, clearly separate observed facts from hypotheses, and mention "
@@ -278,15 +281,48 @@ def _looks_like_tool_deferral(text: str) -> bool:
     patterns = (
         "you can use the",
         "you can use",
+        "you can call the",
+        "you can call",
+        "you can query the",
+        "you can check the",
         "use the \"",
         "use the get_",
         "to investigate further, you can use",
+        "to proceed, i would like to know",
         "it's also a good idea to check",
         "you should use the",
+        "i recommend analyzing",
+        "i recommend calling",
+        "i would recommend analyzing",
+        "i would recommend calling",
+        "call the \"",
+        "calling the \"",
     )
     if any(pattern in normalized for pattern in patterns):
         return True
-    return any(tool_name in normalized for tool_name in ("get_mesh_state", "analyze_node", "get_counter_series", "query_history"))
+    if any(
+        phrase in normalized
+        for phrase in (
+            " tool ",
+            " tool.",
+            " function ",
+            " function.",
+            " data service",
+            " mcp service",
+        )
+    ):
+        return True
+    return any(
+        tool_name in normalized
+        for tool_name in (
+            "get_mesh_state",
+            "analyze_node",
+            "get_counter_series",
+            "query_history",
+            "get_topology_history_entry",
+            "list_topology_history",
+        )
+    )
 
 
 def _looks_like_node_question(text: str) -> bool:
