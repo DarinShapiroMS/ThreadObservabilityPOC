@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.10.2 — Network tab: deeper insight
+
+The Network tab was showing data but not surfacing what to act on. This
+release reshapes every panel on that tab so the most actionable signals
+are visible without scrolling or hunting.
+
+**Headline card (new):**
+- One-line status banner: `degraded · 3 online / 12 offline of 15 · 2 active issues · 1 partition`.
+- Red/yellow warning chips for split-brain (`distinct_thread_networks > 1`),
+  more than one observed partition, duplicate physical-device groups
+  (same hardware commissioned under multiple EUIs), stale nodes, and
+  critical-severity issues. These conditions were previously buried in
+  `health.summary` and invisible to dashboard users.
+
+**Hot spots card (new):**
+- Auto-picks up to four “worst right now” nodes: weakest RSSI online,
+  most TX retries in last 1 h, most parent changes in last 24 h, oldest
+  parent-link age. Clicking any chip scrolls to and flashes the matching
+  row in the Nodes table.
+
+**Active Issues card:**
+- Severity-count pills (`1 critical · 3 warn`) in the header.
+- Sorted by severity desc, then most-recent-first.
+- Per-issue EUI64 chips are clickable and jump to the nodes table.
+
+**Partitions card:**
+- Shows leader name (not just last-4 of EUI), channel, network name,
+  member count. When more than one partition is observed every row is
+  flagged `split` so the condition is impossible to miss.
+
+**Thread Nodes table:**
+- **Default sort is now “worst first”** (offline → degraded RSSI/LQI →
+  healthy). Alphabetical sort is one header-click away.
+- Click any column header to sort; click again to reverse; third click
+  returns to the default worst-first sort.
+- New filter row: free-text search (name/EUI), status, role, area.
+- Two new columns powered by Phase 4 counter time-series:
+  - **TX retry 1h** — `Δ tx_retry_count` over the last hour. Yellow at ≥5,
+    red at ≥20. `reset` rendered explicitly when the counter rolled over.
+  - **Parent Δ 24h** — `Δ parent_change_count` over the last 24 hours.
+    Yellow at ≥1, red at ≥3.
+- `last_seen` now exposes the absolute ISO timestamp on hover.
+
+**New endpoint backing the trend columns:**
+- `GET /v1/counters/deltas` — returns per-EUI `{1h, 24h}` deltas for every
+  numeric counter in one shot. Computed as `last - first` within each
+  window; resets (negative diffs) report `null` so the UI can render
+  `reset` instead of misleading drops. Polled by the dashboard every
+  60 s (out of band from the 10 s `/v1/dev/status` poll).
+
+No MCP, schema, or breaking changes — UI plus one new internal HTTP
+endpoint.
+
 ## 0.10.1 — Graph layout: nodes always spaced out
 
 The Network Graph tab was unusable when more than a handful of devices were

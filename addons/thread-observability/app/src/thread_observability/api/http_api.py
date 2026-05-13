@@ -73,6 +73,29 @@ def _tail_log(n: int = 80) -> list[str]:
 DASHBOARD_HTML = (Path(__file__).parent / "dashboard.html").read_text(encoding="utf-8")
 
 
+def _window_deltas(samples: list[dict[str, object]]) -> dict[str, object]:
+    """Compute (last - first) per numeric counter across a sample window.
+
+    Returns ``{counter_name: delta_int_or_None}``. Reset (negative diff)
+    yields ``None`` so the UI can render it explicitly instead of as a drop.
+    """
+    if not samples or len(samples) < 2:
+        return {}
+    first = samples[0].get("counters") if isinstance(samples[0], dict) else None
+    last = samples[-1].get("counters") if isinstance(samples[-1], dict) else None
+    if not isinstance(first, dict) or not isinstance(last, dict):
+        return {}
+    out: dict[str, object] = {}
+    for k in set(first) | set(last):
+        a = first.get(k)
+        b = last.get(k)
+        if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+            continue
+        diff = b - a
+        out[k] = None if diff < 0 else (int(diff) if diff == int(diff) else round(diff, 3))
+    return out
+
+
 async def _periodic(name: str, interval: int, coro_factory) -> None:
     """Deprecated. Kept only because tests import it; the live scheduler
     now uses :mod:`thread_observability.pipeline.runner` instead. Runs the
@@ -288,6 +311,50 @@ def create_core_app() -> FastAPI:
             return _build_phantom_list()
         except Exception as exc:  # noqa: BLE001
             return {"count": 0, "phantoms": [], "error": str(exc)}
+
+    @app.get("/v1/counters/deltas")
+    def counter_deltas() -> dict[str, object]:
+        """Per-node counter deltas for 1h and 24h windows in a single shot.
+
+        Dashboard uses this to render trend columns in the Nodes table
+        without N round-trips. For each EUI we pull the 24h sample window
+        once, then compute (last - first) per counter, and separately
+        compute (last - first_within_1h) for the 1h subset. Counter
+        resets (negative diff) report ``null``.
+        """
+        from datetime import timedelta as _td
+        store = get_store()
+        now = datetime.now(tz=UTC)
+        since_24h = (now - _td(hours=24)).isoformat()
+        since_1h = (now - _td(hours=1)).isoformat()
+        until = now.isoformat()
+        out: dict[str, dict[str, dict[str, object]]] = {}
+        try:
+            node_rows = store.list_nodes()
+        except Exception:  # noqa: BLE001
+            node_rows = []
+        for nrow in node_rows:
+            eui = nrow.get("eui64") if isinstance(nrow, dict) else None
+            if not eui:
+                continue
+            try:
+                samples = store.get_counter_samples(
+                    eui64=eui, since=since_24h, until=until, limit=2000,
+                )
+            except Exception:  # noqa: BLE001
+                continue
+            if not samples:
+                continue
+            samples_1h = [r for r in samples if (r.get("observed_at") or "") >= since_1h]
+            out[eui] = {
+                "1h": _window_deltas(samples_1h),
+                "24h": _window_deltas(samples),
+            }
+        return {
+            "now": until,
+            "windows": {"1h": since_1h, "24h": since_24h},
+            "nodes": out,
+        }
 
     @app.post("/v1/reasoner/run")
     def reasoner_run() -> dict[str, object]:

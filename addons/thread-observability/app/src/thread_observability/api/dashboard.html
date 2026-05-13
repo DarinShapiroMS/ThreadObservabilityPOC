@@ -91,7 +91,54 @@
   details summary { cursor:pointer; font-weight: 600; }
 
   .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
-</style>
+
+  /* Headline banner */
+  #headline-card { padding: 16px 18px; }
+  #headline-body { font-size: 15px; line-height: 1.5; }
+  #headline-body .lead { font-size: 17px; font-weight: 700; margin-right: 8px; }
+  #headline-body .lead.good { color: #86efac; }
+  #headline-body .lead.warn { color: #fde68a; }
+  #headline-body .lead.bad  { color: #fca5a5; }
+  .warnings-row { margin-top: 10px; display:flex; gap:8px; flex-wrap:wrap; }
+  .warnings-row .warn-chip {
+    padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    border: 1px solid transparent;
+  }
+  .warnings-row .warn-chip.bad  { background:#3b0a0a; color:#fca5a5; border-color:#7f1d1d; }
+  .warnings-row .warn-chip.warn { background:#3b2706; color:#fde68a; border-color:#854d0e; }
+
+  /* Hot spots */
+  #hotspots-body { display:flex; gap:10px; flex-wrap:wrap; }
+  .hotspot {
+    background: var(--panel2); border:1px solid var(--border); border-radius:8px;
+    padding: 8px 12px; display:flex; flex-direction:column; gap:2px; min-width:200px;
+    cursor:pointer;
+  }
+  .hotspot:hover { border-color: var(--accent); }
+  .hotspot .hs-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .hotspot .hs-name { font-size: 13px; font-weight: 600; }
+  .hotspot .hs-value { font-size: 12px; }
+
+  /* Filter selects */
+  .filter-select {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--border);
+    border-radius:6px; padding:4px 8px; font-size:12px;
+  }
+
+  /* Sortable headers */
+  table th[data-sort] { cursor:pointer; user-select:none; }
+  table th[data-sort]:hover { color: var(--fg); }
+  table th[data-sort].sort-asc::after  { content:' ▲'; font-size:9px; color: var(--accent); }
+  table th[data-sort].sort-desc::after { content:' ▼'; font-size:9px; color: var(--accent); }
+
+  /* Delta cells */
+  .delta-bad  { color: var(--bad);  font-weight: 700; }
+  .delta-warn { color: var(--warn); font-weight: 700; }
+  .delta-zero { color: var(--muted); }
+  .delta-reset { color: var(--muted); font-style: italic; }
+
+  /* Highlight target node from hot-spots click */
+  tr.flash-target td { background: rgba(96,165,250,0.18) !important; transition: background 1.2s ease-out; }</style>
 </head>
 <body>
 <header>
@@ -110,6 +157,10 @@
 
 <main>
   <section id="tab-network" class="tab-panel active">
+    <div class="card full" id="headline-card">
+      <div id="headline-body" class="muted">computing…</div>
+      <div id="headline-warnings" class="warnings-row"></div>
+    </div>
     <div class="grid">
       <div class="card">
         <h2>Thread Health</h2>
@@ -133,8 +184,16 @@
       </div>
     </div>
 
+    <div class="card full" id="hotspots-card">
+      <h2>Hot spots <span class="muted" style="text-transform:none; font-weight:400; font-size:11px;">(worst right now)</span></h2>
+      <div id="hotspots-body"><div class="empty">no data</div></div>
+    </div>
+
     <div class="card full" id="issues-card">
-      <h2>Active Issues</h2>
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+        <h2 style="margin:0; flex:1;">Active Issues</h2>
+        <span id="issues-sev-pills"></span>
+      </div>
       <div id="issues-body"><div class="empty">No issues.</div></div>
     </div>
 
@@ -144,22 +203,28 @@
     </div>
 
     <div class="card full">
-      <div class="toolbar">
+      <div class="toolbar" style="flex-wrap:wrap;">
         <h2 style="margin:0; flex:1;">Thread Nodes</h2>
+        <input type="search" id="nodes-search" placeholder="search name / EUI" style="background:var(--panel2); color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:12px;">
+        <select id="nodes-filter-status" class="filter-select"><option value="">all status</option><option value="online">online</option><option value="offline">offline</option><option value="phantom">phantom</option></select>
+        <select id="nodes-filter-role" class="filter-select"><option value="">all roles</option><option value="leader">leader</option><option value="router">router</option><option value="reed">REED</option><option value="fed">end (FED)</option><option value="sed">sleepy (SED)</option></select>
+        <select id="nodes-filter-area" class="filter-select"><option value="">all areas</option></select>
         <label><input type="checkbox" id="show-phantoms"> show phantoms</label>
       </div>
       <div style="overflow-x:auto;">
         <table id="nodes-table">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Area</th>
-              <th>Role</th>
-              <th title="Received Signal Strength Indicator — higher (less negative) dBm is stronger">RSSI</th>
-              <th title="Matter LinkQuality — 0..3 quantized: 3 good, 2 fair, 1 poor, 0 no link">LQI</th>
-              <th>Status</th>
-              <th>Last seen</th>
-              <th>EUI64</th>
+              <th data-sort="name">Name</th>
+              <th data-sort="area">Area</th>
+              <th data-sort="role">Role</th>
+              <th data-sort="rssi" title="Received Signal Strength Indicator — higher (less negative) dBm is stronger">RSSI</th>
+              <th data-sort="lqi" title="Matter LinkQuality — 0..3 quantized: 3 good, 2 fair, 1 poor, 0 no link">LQI</th>
+              <th data-sort="tx_retry_1h" title="Δ tx_retry_count over the last 1 hour (Phase 4 counter time-series)">TX retry 1h</th>
+              <th data-sort="parent_changes_24h" title="Δ parent_change_count over the last 24 hours">Parent Δ 24h</th>
+              <th data-sort="status">Status</th>
+              <th data-sort="last_seen">Last seen</th>
+              <th data-sort="eui64">EUI64</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -258,6 +323,7 @@
         <li><code>GET /v1/partitions?include_phantoms=</code></li>
         <li><code>GET /v1/phantoms</code></li>
         <li><code>GET /v1/dev/status?include_phantoms=</code></li>
+        <li><code>GET /v1/counters/deltas</code></li>
         <li><code>GET /v1/ingest/state</code></li>
       </ul>
     </details>
@@ -367,78 +433,424 @@ document.querySelectorAll('nav.tabs button').forEach(btn => {
 });
 
 let lastStatus = null;
+let lastDeltas = null;            // { now, windows, nodes: {eui: {1h:{...}, 24h:{...}}} }
+let nodesSort = { key: null, dir: 'asc' };  // null => server "worst first" default
+const SEV_RANK = { critical: 0, error: 0, warning: 1, warn: 1, info: 2, notice: 3 };
+
+function isOtbrNode(n) {
+  return n && (n.role === 'border_router' || n.routing_role === 'border_router');
+}
+
+function nodeHealthRank(n) {
+  // Lower = worse. Used for default "worst first" sort.
+  if (!n) return 99;
+  if (n.status === 'offline') return 0;
+  if (n.status === 'phantom') return 1;
+  const sig = n.signal_strength || {};
+  const rssi = sig.rssi;
+  const lqi = sig.lqi;
+  if (rssi != null && rssi < -85) return 2;
+  if (lqi != null && lqi <= 1) return 2;
+  if (rssi != null && rssi < -70) return 3;
+  if (lqi != null && lqi <= 2) return 3;
+  return 9;  // healthy online
+}
+
+function deltaForNode(eui, window, counter) {
+  if (!lastDeltas || !eui) return undefined;
+  const node = lastDeltas.nodes && lastDeltas.nodes[eui];
+  if (!node) return undefined;
+  const win = node[window];
+  if (!win) return undefined;
+  return win[counter];  // number, null (reset), or undefined (missing)
+}
+
+function fmtDelta(v) {
+  if (v === undefined) return '<span class="muted">—</span>';
+  if (v === null) return '<span class="delta-reset" title="counter reset detected in window">reset</span>';
+  if (v === 0) return '<span class="delta-zero">0</span>';
+  return String(v);
+}
+
+function deltaClass(v, warnAt, badAt) {
+  if (v === undefined || v === null) return '';
+  if (v >= badAt) return 'delta-bad';
+  if (v >= warnAt) return 'delta-warn';
+  return '';
+}
+
+function renderHeadline(s) {
+  const h = s.health || {};
+  const summary = h.summary || {};
+  const counts = s.node_counts || {};
+  const issuesObj = h.active_issues || {};
+  const issuesCount = issuesObj.count
+    || (s.issues && (s.issues.issues || []).length) || 0;
+  const bySev = issuesObj.by_severity || {};
+  const status = h.status || 'unknown';
+  const lead = status === 'healthy' ? 'good' : (status === 'degraded' ? 'warn' : (status === 'critical' ? 'bad' : 'warn'));
+  const distinctNets = summary.distinct_thread_networks || 0;
+  const dupGroups = summary.duplicate_physical_device_groups || 0;
+  const dupRows = summary.duplicate_physical_device_rows || 0;
+  const partCount = (s.partitions && s.partitions.partition_count) || 0;
+  const online = counts.online || 0;
+  const offline = counts.offline || 0;
+  const total = counts.total || (online + offline);
+  const bits = [];
+  bits.push(`<span class="lead ${lead}">${escapeHtml(status)}</span>`);
+  bits.push(`${online} online / ${offline} offline of ${total}`);
+  bits.push(`${issuesCount} active issue${issuesCount === 1 ? '' : 's'}`);
+  bits.push(`${partCount} partition${partCount === 1 ? '' : 's'}`);
+  if (distinctNets > 1) bits.push(`<span class="bad">${distinctNets} distinct Thread networks</span>`);
+  $('#headline-body').innerHTML = bits.join(' · ');
+
+  const warnings = $('#headline-warnings');
+  warnings.innerHTML = '';
+  if (distinctNets > 1) {
+    warnings.appendChild(el('span', {
+      class: 'warn-chip bad',
+      title: 'Multiple Thread networks reported by registered devices. Likely split-brain or stale registrations.',
+    }, `SPLIT BRAIN: ${distinctNets} Thread networks`));
+  }
+  if (partCount > 1) {
+    warnings.appendChild(el('span', {
+      class: 'warn-chip bad',
+      title: 'More than one partition observed. Usually means the mesh has split.',
+    }, `${partCount} partitions observed`));
+  }
+  if (dupGroups > 0) {
+    warnings.appendChild(el('span', {
+      class: 'warn-chip warn',
+      title: 'Same physical device commissioned under multiple EUI64s.',
+    }, `Duplicate hardware: ${dupGroups} group${dupGroups === 1 ? '' : 's'} (${dupRows} rows)`));
+  }
+  const stale = summary.stale_nodes || 0;
+  if (stale > 0) {
+    warnings.appendChild(el('span', {
+      class: 'warn-chip warn',
+      title: 'Nodes not seen in their parent router\u2019s neighbor table recently.',
+    }, `${stale} stale node${stale === 1 ? '' : 's'}`));
+  }
+  const bad = bySev.critical || bySev.error || 0;
+  if (bad > 0) {
+    warnings.appendChild(el('span', {
+      class: 'warn-chip bad',
+      title: 'Critical/error severity active issues.',
+    }, `${bad} critical issue${bad === 1 ? '' : 's'}`));
+  }
+}
+
+function renderHotSpots(s) {
+  const body = $('#hotspots-body');
+  body.innerHTML = '';
+  const nodes = s.all_nodes || [];
+  const online = nodes.filter(n => n.status === 'online');
+  const spots = [];
+
+  // 1) worst RSSI online
+  let worstRssi = null;
+  for (const n of online) {
+    const r = (n.signal_strength || {}).rssi;
+    if (r == null) continue;
+    if (!worstRssi || r < (worstRssi.signal_strength || {}).rssi) worstRssi = n;
+  }
+  if (worstRssi) {
+    const r = (worstRssi.signal_strength || {}).rssi;
+    spots.push({
+      eui: worstRssi.eui64,
+      label: 'Weakest signal',
+      name: worstRssi.display_name || (worstRssi.eui64 || '').slice(-4).toUpperCase(),
+      value: r + ' dBm',
+      valueCls: rssiClass(r),
+    });
+  }
+
+  // 2) highest tx_retry_count 1h
+  if (lastDeltas && lastDeltas.nodes) {
+    let topRetry = null;
+    for (const n of online) {
+      const v = deltaForNode(n.eui64, '1h', 'tx_retry_count');
+      if (typeof v === 'number' && v > 0 && (!topRetry || v > topRetry.v)) {
+        topRetry = { n, v };
+      }
+    }
+    if (topRetry) {
+      spots.push({
+        eui: topRetry.n.eui64,
+        label: 'Most TX retries (1h)',
+        name: topRetry.n.display_name || (topRetry.n.eui64 || '').slice(-4).toUpperCase(),
+        value: '+' + topRetry.v + ' retries',
+        valueCls: 'delta-warn',
+      });
+    }
+
+    // 3) most parent changes 24h
+    let topParent = null;
+    for (const n of nodes) {
+      const v = deltaForNode(n.eui64, '24h', 'parent_change_count');
+      if (typeof v === 'number' && v > 0 && (!topParent || v > topParent.v)) {
+        topParent = { n, v };
+      }
+    }
+    if (topParent) {
+      spots.push({
+        eui: topParent.n.eui64,
+        label: 'Most parent changes (24h)',
+        name: topParent.n.display_name || (topParent.n.eui64 || '').slice(-4).toUpperCase(),
+        value: '+' + topParent.v + ' changes',
+        valueCls: topParent.v >= 3 ? 'delta-bad' : 'delta-warn',
+      });
+    }
+  }
+
+  // 4) oldest parent link age (any online end-device)
+  let stalest = null;
+  for (const n of online) {
+    const age = n.parent_link_age_seconds;
+    if (age == null) continue;
+    if (n.device_kind !== 'sed' && n.device_kind !== 'fed') continue;
+    if (!stalest || age > stalest.parent_link_age_seconds) stalest = n;
+  }
+  if (stalest && stalest.parent_link_age_seconds > 300) {
+    const mins = Math.round(stalest.parent_link_age_seconds / 60);
+    spots.push({
+      eui: stalest.eui64,
+      label: 'Oldest parent link',
+      name: stalest.display_name || (stalest.eui64 || '').slice(-4).toUpperCase(),
+      value: mins + ' min since last keep-alive',
+      valueCls: mins > 60 ? 'delta-bad' : 'delta-warn',
+    });
+  }
+
+  if (!spots.length) {
+    body.appendChild(el('div', {class:'empty'}, 'No standout problem nodes right now.'));
+    return;
+  }
+  for (const sp of spots) {
+    const card = el('div', {class:'hotspot', 'data-eui': sp.eui || ''});
+    card.appendChild(el('div', {class:'hs-label'}, sp.label));
+    card.appendChild(el('div', {class:'hs-name'}, sp.name));
+    card.appendChild(el('div', {class:'hs-value ' + (sp.valueCls || '')}, sp.value));
+    card.addEventListener('click', () => scrollToNode(sp.eui));
+    body.appendChild(card);
+  }
+}
+
+function scrollToNode(eui) {
+  if (!eui) return;
+  const tbody = $('#nodes-table tbody');
+  if (!tbody) return;
+  // Clear existing flashes.
+  tbody.querySelectorAll('tr.flash-target').forEach(t => t.classList.remove('flash-target'));
+  const tr = tbody.querySelector(`tr[data-eui="${eui}"]`);
+  if (!tr) return;
+  tr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  tr.classList.add('flash-target');
+  setTimeout(() => tr.classList.remove('flash-target'), 1600);
+}
+
+function renderIssues(s) {
+  const issuesBody = $('#issues-body');
+  const pillsHost = $('#issues-sev-pills');
+  issuesBody.innerHTML = '';
+  pillsHost.innerHTML = '';
+  const issues = ((s.issues && s.issues.issues) || []).slice();
+  if (!issues.length) {
+    issuesBody.appendChild(el('div', {class:'empty'}, 'No active issues.'));
+    return;
+  }
+  // Severity counts.
+  const counts = {};
+  for (const i of issues) {
+    const sev = (i.severity || 'info').toLowerCase();
+    counts[sev] = (counts[sev] || 0) + 1;
+  }
+  const order = ['critical', 'error', 'warning', 'warn', 'info', 'notice'];
+  for (const k of order) {
+    if (!counts[k]) continue;
+    const cls = (k === 'critical' || k === 'error') ? 'bad' : (k.startsWith('warn') ? 'warn' : 'muted');
+    pillsHost.appendChild(el('span', {
+      class: 'pill ' + cls,
+      style: 'margin-left:4px;',
+    }, counts[k] + ' ' + k));
+  }
+  // Sort: severity asc rank, then most-recent first.
+  issues.sort((a, b) => {
+    const ra = SEV_RANK[(a.severity || '').toLowerCase()] ?? 9;
+    const rb = SEV_RANK[(b.severity || '').toLowerCase()] ?? 9;
+    if (ra !== rb) return ra - rb;
+    return (b.first_seen || '').localeCompare(a.first_seen || '');
+  });
+  const list = el('ul', {style: 'margin:0; padding-left: 18px;'});
+  for (const i of issues) {
+    const sev = (i.severity || 'info').toLowerCase();
+    const pillCls = (sev === 'critical' || sev === 'error') ? 'bad' : (sev.startsWith('warn') ? 'warn' : 'muted');
+    const sevPill = '<span class="pill ' + pillCls + '">' + escapeHtml(i.severity || 'info') + '</span> ';
+    const kind = '<b>' + escapeHtml(i.kind || i.code || '') + '</b>';
+    let chip = '';
+    if (i.eui64) {
+      const safe = escapeHtml(i.eui64);
+      chip = ' <code style="cursor:pointer;" data-jump="' + safe + '" title="click to find in nodes table">' + safe.slice(-6).toUpperCase() + '</code>';
+    }
+    const detail = i.detail ? ' <span class="muted">' + escapeHtml(i.detail) + '</span>' : '';
+    list.appendChild(el('li', {html: sevPill + kind + chip + detail}));
+  }
+  issuesBody.appendChild(list);
+  // Wire EUI chips to jump.
+  list.querySelectorAll('code[data-jump]').forEach(c => {
+    c.addEventListener('click', () => scrollToNode(c.getAttribute('data-jump')));
+  });
+}
+
+function renderPartitionsCard(s) {
+  const pBody = $('#partitions-body');
+  pBody.innerHTML = '';
+  const p = s.partitions || {};
+  const parts = p.partitions || [];
+  if (!parts.length) {
+    pBody.appendChild(el('div', {class:'empty'}, 'No partitions discovered.'));
+    return;
+  }
+  const splitBrain = parts.length > 1;
+  const ul = el('ul', {style:'margin:0; padding-left:18px; line-height:1.7;'});
+  for (const pp of parts) {
+    const leadName = pp.leader_name
+      ? escapeHtml(pp.leader_name)
+      : (pp.leader_eui64
+          ? '<code>' + pp.leader_eui64.slice(-4).toUpperCase() + '</code>'
+          : '<span class="muted">no leader</span>');
+    const count = (pp.member_count != null ? pp.member_count : (pp.node_count || 0));
+    const channel = pp.channel != null ? (' · ch ' + pp.channel) : '';
+    const netName = pp.network_name ? (' · <code>' + escapeHtml(pp.network_name) + '</code>') : '';
+    const partTag = '<code>' + String(pp.partition_id).slice(-4).toUpperCase() + '</code>';
+    const brain = splitBrain ? ' <span class="pill bad" title="More than one partition observed">split</span>' : '';
+    ul.appendChild(el('li', {html:
+      partTag + brain + ' · leader ' + leadName + ' · ' + count + ' node' + (count === 1 ? '' : 's') + channel + netName
+    }));
+  }
+  pBody.appendChild(ul);
+}
 
 function renderNetwork(s) {
   const h = s.health || {};
   $('#health-score').textContent = (h.score != null) ? h.score : '—';
-  $('#health-sub').textContent = (h.status || 'unknown') + ' · ' + ((h.issues_active||0) + ' issues');
+  $('#health-sub').textContent = (h.status || 'unknown') + ' · ' + ((h.active_issues && h.active_issues.count) || (h.issues_active || 0)) + ' issues';
 
-  // Partition + node counts come pre-computed from the server. The UI
-  // never recomputes — same numbers are surfaced to MCP / AI consumers.
   const p = s.partitions || {};
   $('#partition-count').textContent = p.partition_count != null ? p.partition_count : '—';
-  $('#partition-sub').textContent = p.summary || '—';
+  $('#partition-sub').textContent = p.summary || (p.partition_count > 1 ? 'split brain' : 'single partition');
 
   const nodes = s.all_nodes || [];
   const counts = s.node_counts || {};
   const alive = (counts.online || 0) + (counts.offline || 0);
   $('#node-count').textContent = alive;
-  $('#node-sub').textContent = (counts.total || nodes.length) + ' total (incl. phantoms)';
+  $('#node-sub').textContent = (counts.online || 0) + ' online · ' + (counts.offline || 0) + ' offline';
 
   const phantoms = (s.phantoms && s.phantoms.phantoms) || [];
   $('#phantom-count').textContent = phantoms.length;
 
-  const issuesBody = $('#issues-body');
-  issuesBody.innerHTML = '';
-  const issues = (s.issues && s.issues.issues) || [];
-  if (!issues.length) issuesBody.appendChild(el('div', {class:'empty'}, 'No active issues.'));
-  else {
-    const list = el('ul', {style: 'margin:0; padding-left: 18px;'});
-    for (const i of issues) {
-      const sev = i.severity || 'info';
-      const pillCls = (sev === 'critical' || sev === 'error') ? 'bad' : ((sev === 'warn' || sev === 'warning') ? 'warn' : 'muted');
-      list.appendChild(el('li', {html: '<span class="pill ' + pillCls + '">' + sev + '</span> ' + (i.kind || i.code || '') + ' <span class="muted">' + (i.detail || '') + '</span>'}));
-    }
-    issuesBody.appendChild(list);
+  // Populate area filter once per render (preserve selection if still present).
+  const areaSelect = $('#nodes-filter-area');
+  const areas = Array.from(new Set(nodes.map(n => n.area_name).filter(Boolean))).sort();
+  const prevArea = areaSelect.value;
+  areaSelect.innerHTML = '<option value="">all areas</option>';
+  for (const a of areas) {
+    const opt = el('option', {value: a}, a);
+    if (a === prevArea) opt.setAttribute('selected', 'selected');
+    areaSelect.appendChild(opt);
   }
+  if (prevArea && !areas.includes(prevArea)) areaSelect.value = '';
 
-  const pBody = $('#partitions-body');
-  pBody.innerHTML = '';
-  const parts = p.partitions || [];
-  if (!parts.length) pBody.appendChild(el('div', {class:'empty'}, 'No partitions discovered.'));
-  else {
-    const ul = el('ul', {style:'margin:0; padding-left:18px;'});
-    for (const pp of parts) {
-      const lead = pp.leader_eui64 ? '<code>' + pp.leader_eui64.slice(-4).toUpperCase() + '</code>' : '<span class="muted">no leader</span>';
-      const count = (pp.member_count != null ? pp.member_count : (pp.node_count || 0));
-      ul.appendChild(el('li', {html:
-        '<code>' + pp.partition_id + '</code> · leader ' + lead +
-        ' · ' + count + ' nodes'
-      }));
-    }
-    pBody.appendChild(ul);
-  }
-
+  renderHeadline(s);
+  renderHotSpots(s);
+  renderIssues(s);
+  renderPartitionsCard(s);
   renderNodesTable(nodes);
 }
 
-function renderNodesTable(nodes) {
+function applyNodeFilters(nodes) {
   const showPhantoms = $('#show-phantoms').checked;
+  const statusF = $('#nodes-filter-status').value;
+  const roleF = $('#nodes-filter-role').value;
+  const areaF = $('#nodes-filter-area').value;
+  const q = ($('#nodes-search').value || '').trim().toLowerCase();
+  return nodes.filter(n => {
+    if (n.status === 'phantom' && !showPhantoms && statusF !== 'phantom') return false;
+    if (statusF && n.status !== statusF) return false;
+    if (roleF) {
+      const isLeader = n.routing_role === 'leader';
+      if (roleF === 'leader' && !isLeader) return false;
+      if (roleF !== 'leader' && n.device_kind !== roleF) return false;
+    }
+    if (areaF && n.area_name !== areaF) return false;
+    if (q) {
+      const hay = ((n.display_name || '') + ' ' + (n.friendly_name || '') + ' ' + (n.eui64 || '')).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function sortNodesForTable(nodes) {
+  if (!nodesSort.key) {
+    // Default: worst health first, then by name.
+    return nodes.slice().sort((a, b) => {
+      const ra = nodeHealthRank(a);
+      const rb = nodeHealthRank(b);
+      if (ra !== rb) return ra - rb;
+      return (a.display_name || a.friendly_name || '').localeCompare(b.display_name || b.friendly_name || '');
+    });
+  }
+  const dir = nodesSort.dir === 'desc' ? -1 : 1;
+  const key = nodesSort.key;
+  return nodes.slice().sort((a, b) => {
+    let va, vb;
+    switch (key) {
+      case 'name': va = (a.display_name||a.friendly_name||'').toLowerCase(); vb = (b.display_name||b.friendly_name||'').toLowerCase(); break;
+      case 'area': va = (a.area_name||'').toLowerCase(); vb = (b.area_name||'').toLowerCase(); break;
+      case 'role': va = (a.routing_role||'') + (a.device_kind||''); vb = (b.routing_role||'') + (b.device_kind||''); break;
+      case 'rssi': va = (a.signal_strength||{}).rssi; vb = (b.signal_strength||{}).rssi; break;
+      case 'lqi':  va = (a.signal_strength||{}).lqi;  vb = (b.signal_strength||{}).lqi; break;
+      case 'tx_retry_1h':       va = deltaForNode(a.eui64, '1h', 'tx_retry_count');       vb = deltaForNode(b.eui64, '1h', 'tx_retry_count'); break;
+      case 'parent_changes_24h':va = deltaForNode(a.eui64, '24h', 'parent_change_count'); vb = deltaForNode(b.eui64, '24h', 'parent_change_count'); break;
+      case 'status':            va = a.status||''; vb = b.status||''; break;
+      case 'last_seen':         va = a.last_seen||''; vb = b.last_seen||''; break;
+      case 'eui64':             va = a.eui64||''; vb = b.eui64||''; break;
+      default: va = ''; vb = '';
+    }
+    // Treat undefined/null as worst (sort to end on ascending).
+    const aMissing = va == null || va === '';
+    const bMissing = vb == null || vb === '';
+    if (aMissing && bMissing) return 0;
+    if (aMissing) return 1;
+    if (bMissing) return -1;
+    if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
+    return String(va).localeCompare(String(vb)) * dir;
+  });
+}
+
+function renderNodesTable(nodes) {
   const tbody = $('#nodes-table tbody');
   tbody.innerHTML = '';
-  // Server delivers `all_nodes` pre-sorted (phantoms last, then by name).
-  // Do not re-sort — that's data shaping, which belongs on the server so
-  // MCP / AI consumers get the same order.
-  for (const n of nodes) {
-    if (n.status === 'phantom' && !showPhantoms) continue;
+  const filtered = applyNodeFilters(nodes);
+  const sorted = sortNodesForTable(filtered);
+
+  // Reflect current sort in headers.
+  document.querySelectorAll('#nodes-table th[data-sort]').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (nodesSort.key && th.dataset.sort === nodesSort.key) {
+      th.classList.add(nodesSort.dir === 'desc' ? 'sort-desc' : 'sort-asc');
+    }
+  });
+
+  for (const n of sorted) {
     const sig = n.signal_strength || {};
     const rssi = sig.rssi;
     const lqi  = sig.lqi;
-    const tr = el('tr');
+    const tr = el('tr', {'data-eui': n.eui64 || ''});
     const nameMain =
       (n.display_name || '<span class="muted">unnamed</span>') +
       (n.status === 'phantom' ? ' <span class="pill warn">phantom</span>' : '');
-    // Sub-line surfaces HA registry metadata: manufacturer · model · sw v…
     const metaBits = [];
     if (n.manufacturer) metaBits.push(escapeHtml(n.manufacturer));
     if (n.model) metaBits.push(escapeHtml(n.model));
@@ -458,24 +870,16 @@ function renderNodesTable(nodes) {
       ? ('partition ' + String(n.partition_id).slice(-4))
       : null;
     if (n.device_kind === 'sed' || n.device_kind === 'fed') {
-      // End devices have one parent router.
       const parent = n.parent_name || (n.parent_eui64 ? n.parent_eui64.slice(-4).toUpperCase() : null);
       if (parent) roleHtml += '<span class="parent-hint">via ' + parent + '</span>';
       else roleHtml += '<span class="parent-hint">no parent reported</span>';
     } else if (n.routing_role === 'leader') {
-      // Leader is the partition's control-plane coordinator (assigns Router IDs,
-      // maintains Network Data). It is NOT a forwarding hub — packets do not
-      // have to traverse it. Next-hop routing is decided per-router via the
-      // RouteTable.
       if (partTag) roleHtml += '<span class="parent-hint">' + partTag + ' · ' + (n.router_peer_count || 0) + ' router peers · control-plane only</span>';
       const peers = (n.router_peers || []).map(p => p.name || (p.eui64 || '').slice(-4).toUpperCase());
       if (peers.length) roleHtml += '<span class="parent-hint">peers: ' + peers.join(', ') + '</span>';
       if (n.role === 'border_router') roleHtml += '<span class="parent-hint">this is the Thread Border Router</span>';
       else roleHtml += renderNextHop(n);
     } else if (n.device_kind === 'router') {
-      // Routers are peers in the mesh. Next-hop routing is per-destination via
-      // the RouteTable; the partition Leader is just the control-plane elector,
-      // not a forwarding hop.
       const bits = [];
       if (partTag) bits.push(partTag);
       bits.push((n.router_peer_count || 0) + ' peers');
@@ -487,13 +891,25 @@ function renderNodesTable(nodes) {
       else roleHtml += renderNextHop(n);
     }
     roleCell.innerHTML = roleHtml;
+
     const rssiCell = el('td', {class: rssiClass(rssi)}, rssi == null ? '—' : (rssi + ' dBm'));
     const lqiCell = el('td', {class: lqiClass(lqi)}, lqi == null ? '—' : String(lqi));
+
+    // Phase 4 delta cells.
+    const txRetry1h = deltaForNode(n.eui64, '1h', 'tx_retry_count');
+    const parentDelta24h = deltaForNode(n.eui64, '24h', 'parent_change_count');
+    const retryCell = el('td', {
+      class: deltaClass(txRetry1h, 5, 20),
+      html: fmtDelta(txRetry1h),
+    });
+    const parentCell = el('td', {
+      class: deltaClass(parentDelta24h, 1, 3),
+      html: fmtDelta(parentDelta24h),
+    });
+
     const statusCls = n.status === 'online' ? 'good' : (n.status === 'offline' ? 'bad' : 'muted');
     const statusCell = el('td', {html: '<span class="pill ' + statusCls + '">' + (n.status || '—') + '</span>'});
-    const seenCell = el('td', {}, fmtAge(n.last_seen));
-    // EUI cell: short EUI plus a tooltip with the full EUI, HA device_id,
-    // hw_version, and ha_device_path so users can correlate with HA itself.
+    const seenCell = el('td', {title: n.last_seen || ''}, fmtAge(n.last_seen));
     const euiTipBits = [];
     if (n.eui64) euiTipBits.push('EUI64: ' + n.eui64);
     if (n.device_id) euiTipBits.push('HA device_id: ' + n.device_id);
@@ -503,7 +919,12 @@ function renderNodesTable(nodes) {
     const euiCell = el('td', {html: n.eui64
       ? '<code title="' + escapeHtml(euiTip) + '">' + n.eui64.slice(-6).toUpperCase() + '</code>'
       : '<span class="muted">—</span>'});
-    tr.append(nameCell, areaCell, roleCell, rssiCell, lqiCell, statusCell, seenCell, euiCell);
+    tr.append(nameCell, areaCell, roleCell, rssiCell, lqiCell, retryCell, parentCell, statusCell, seenCell, euiCell);
+    tbody.appendChild(tr);
+  }
+  if (!sorted.length) {
+    const tr = el('tr');
+    tr.appendChild(el('td', {colspan: 10, class: 'empty', style:'text-align:center;'}, 'no nodes match current filters'));
     tbody.appendChild(tr);
   }
 }
@@ -807,7 +1228,42 @@ $('#graph-relayout').addEventListener('click', () => {
   if (!cy) return;
   runGraphLayout(cy, graphLayoutOptions(cy.nodes().length, { randomize: true }));
 });
-$('#show-phantoms').addEventListener('change', () => { if (lastStatus) renderNodesTable(lastStatus.all_nodes || []); });
+
+// Nodes-table filter / search / sort handlers re-render only the table.
+function rerenderNodes() {
+  if (lastStatus) renderNodesTable(lastStatus.all_nodes || []);
+}
+$('#show-phantoms').addEventListener('change', rerenderNodes);
+$('#nodes-search').addEventListener('input', rerenderNodes);
+$('#nodes-filter-status').addEventListener('change', rerenderNodes);
+$('#nodes-filter-role').addEventListener('change', rerenderNodes);
+$('#nodes-filter-area').addEventListener('change', rerenderNodes);
+document.querySelectorAll('#nodes-table th[data-sort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const k = th.dataset.sort;
+    if (nodesSort.key === k) {
+      if (nodesSort.dir === 'asc') nodesSort.dir = 'desc';
+      else { nodesSort.key = null; nodesSort.dir = 'asc'; }  // third click = back to default
+    } else {
+      nodesSort.key = k; nodesSort.dir = 'asc';
+    }
+    rerenderNodes();
+    if (lastStatus) renderHotSpots(lastStatus);  // hot-spot click targets depend on table rows
+  });
+});
+
+// Counter deltas are expensive (one query per node) — fetch on a slower
+// cadence than /v1/dev/status. First call happens right after first refresh.
+async function refreshDeltas() {
+  try {
+    const d = await fetchJSON('v1/counters/deltas');
+    lastDeltas = d;
+    if (lastStatus) {
+      renderHotSpots(lastStatus);
+      renderNodesTable(lastStatus.all_nodes || []);
+    }
+  } catch (_) { /* keep last known */ }
+}
 
 async function refresh() {
   try {
@@ -876,8 +1332,9 @@ async function pipelinePoll() {
 }
 setInterval(pipelinePoll, 1000);
 
-refresh();
+refresh().then(refreshDeltas);
 setInterval(refresh, 10000);
+setInterval(refreshDeltas, 60000);  // counter deltas: every minute
 </script>
 </body>
 </html>
