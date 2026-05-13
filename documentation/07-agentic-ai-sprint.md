@@ -190,8 +190,10 @@ Token cost is bounded: only IDs and counts go in, not full payloads.
 - **No API keys here.** The add-on never sees the user's LLM key —
   only HA's Supervisor token, scoped to the `conversation` and
   `services` HA APIs.
-- **Transcripts are local.** Stored in our SQLite, pruned per the
-  same retention policy. Export and clear buttons in the panel.
+- **No transcript persistence in v1.** Conversations are
+  in-browser-tab only; reload starts a fresh session. The agent
+  rederives state from `page_context` + tools each turn. (See
+  decision 3 in §9.)
 - **Tool-call transparency.** Every LLM-initiated tool call is
   displayed to the user; the raw JSON result is one click away.
 - **No write tools by default.** The MCP toolset is read-only today.
@@ -199,43 +201,71 @@ Token cost is bounded: only IDs and counts go in, not full payloads.
   reboot/recommission), each will need explicit `agent_can_invoke:
   false` until vetted. Track in `mcp_tools.py` per-tool metadata.
 
-## 9. Open questions for review
+## 9. Resolved design decisions (2026-05-12)
 
-1. **Streaming vs. request/response.** `conversation.process` is
-   sync. For long agent turns, do we accept the latency or build a
-   WebSocket relay to HA for partial deltas? *Recommendation: ship
-   sync v1, add streaming in Phase 5 if users ask.*
-2. **HA-native frontend pieces.** HA's frontend exposes a `<ha-conversation>`-
-   ish chat component in some builds. Reuse for visual consistency
-   inside our iframe, or build a small custom chat (more control,
-   no version drift risk)? *Lean: custom, ~300 lines of JS.*
-3. **MCP tool exposure granularity.** Should every existing MCP tool
-   be exposed to the agent automatically, or do we need a curated
-   subset to keep the tool list inside model context-window budgets?
-   *Likely curate to ~15 most useful, expose the rest behind a
-   "search_tools" meta-tool.*
-4. **Conversation ID lifetime.** HA's default forgets after ~10 min.
-   Do we keep our own session memory and re-prime the agent on
-   reload? *Yes — and surface "this is a fresh conversation"
-   visually whenever HA's memory has dropped.*
-5. **Suggested prompts source.** Hard-coded heuristics in JS, or
-   an MCP tool `get_suggested_prompts` that the panel calls each
-   refresh? *MCP — keeps the logic on the server where AI consumers
-   can also use it.*
+All five open questions resolved by @DarinShapiroMS:
 
-## 10. Phases & rough sequencing
+1. **Transport: sync now, hybrid streaming later.** Ship `conversation.process`
+   sync in v1 (#10). Phase 5 adds a hybrid path that streams when the
+   selected agent supports it and **automatically falls back to sync**
+   when it doesn't (Ollama-via-HA, local intent agent, older HA
+   builds). Wire format already reserves a `streaming` flag so the
+   schema is forward-compatible.
 
-1. **Phase 1 — Transport + docs.** Issues #7, #8. No UI yet; just
-   make Path A work end-to-end with HA's MCP Client integration.
-2. **Phase 2 — Chat panel MVP.** Issues #9, #10. Static suggested
-   prompts, sync turns, no page context yet.
-3. **Phase 3 — Context-aware.** Issues #11, #12. Selection-aware
-   prompts, tool-call surfacing.
-4. **Phase 4 — Persistence + safety.** Issues #13, #14. Local
-   transcripts, opt-in toggles, write-tool gating.
-5. **Phase 5 — Polish.** Issue #15, streaming, voice (optional).
+2. **Tool exposure: all tools, richer descriptions, plus web search.**
+   Do **not** curate down to a subset. Instead, invest in
+   high-quality MCP tool descriptions and a per-tool "background"
+   block so the agent gets the context it needs (HA version, OTBR
+   version, Thread / Matter spec links, semantic notes on what each
+   field means). Filed as **issue #16**. Also expose a web-search
+   tool to the agent for looking up spec / errata / community
+   knowledge — filed as **issue #17**.
 
-## 11. Out of scope (for now)
+3. **No conversation persistence in v1.** Context comes from the
+   data we pull each turn, not from a long-running memory store.
+   This means a refresh starts a clean session, and that's fine —
+   the agent re-derives state from `page_context` + tool calls.
+   Issue #13 closed as not planned for v1. Can be reopened later if
+   transcript-search / "what did the AI say last week" becomes a
+   real ask.
+
+4. **Custom chat UI component.** Build our own small chat surface
+   (~300 lines of JS). HA's frontend chat bits are internal /
+   version-drifty, and we want full control of tool-call disclosure
+   and page-context wiring. No change to #9.
+
+5. **Suggested prompts come from `start_triage`.** The dashboard
+   chat panel calls `start_triage` on open (and after each refresh
+   tick), and renders its `recommended_next` plus a small set of
+   triage-derived questions as the suggested prompts. No separate
+   `get_suggested_prompts` MCP tool needed — `start_triage` already
+   produces the right signal. Updated scope in #11.
+
+## 10. New issues from the design review
+
+- **#16** — Enrich MCP tool descriptions with versions, spec refs,
+  field semantics, and per-tool background blocks (supports decision
+  2 above; replaces the proposed curation strategy).
+- **#17** — Add `web_search` MCP tool so the agent can pull in
+  authoritative external references (Thread spec, Matter spec, HA
+  release notes, vendor docs) as part of an answer.
+
+## 11. Phases & rough sequencing (updated)
+
+1. **Phase 1 — Transport + docs + tool enrichment.** Issues #7, #8,
+   #16. Path A works end-to-end with HA's MCP Client and the tools
+   the agent sees come with rich descriptions and background blocks.
+2. **Phase 2 — Chat panel MVP.** Issues #9, #10. Sync turns,
+   triage-derived suggested prompts, no page context yet.
+3. **Phase 3 — Context-aware + web search.** Issues #11, #12, #17.
+   Selection-aware prompts, tool-call surfacing, agent can call
+   `web_search`.
+4. **Phase 4 — Safety knobs.** Issue #14 (options). Persistence
+   (#13) explicitly *not* part of v1.
+5. **Phase 5 — Polish.** Issue #15 (telemetry), hybrid streaming
+   transport with sync fallback, voice (optional).
+
+## 12. Out of scope (for now)
 
 - Custom fine-tuned Thread model.
 - Multi-user / multi-tenant chat sessions.
