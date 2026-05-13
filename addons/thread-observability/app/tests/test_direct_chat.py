@@ -125,3 +125,87 @@ def test_dispatch_chat_tool_allows_other_safe_read_tool(monkeypatch) -> None:
     monkeypatch.setattr(mcp_tools, "_dispatch_and_wrap", fake_dispatch)
     result = asyncio.run(direct_chat._dispatch_chat_tool("get_timeseries_health", {}))
     assert result["data"]["backend"] == "sqlite"
+
+
+def test_looks_like_tool_deferral_detects_punting_response() -> None:
+    text = (
+        "To investigate further, you can use the get_counter_series tool and the analyze_node tool. "
+        "It is also a good idea to check the mesh state using get_mesh_state."
+    )
+    assert direct_chat._looks_like_tool_deferral(text) is True
+
+
+def test_direct_chat_turn_retries_once_when_model_defers_tool_use(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "You can use the get_health_snapshot tool to inspect the current mesh health.",
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 2:
+            retry_message = calls[1]["messages"][-1]
+            assert retry_message["role"] == "user"
+            assert "Do not tell me to use the available tools myself" in retry_message["content"]
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-2",
+                                    "type": "function",
+                                    "function": {"name": "get_health_snapshot", "arguments": "{}"},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "I checked the current health snapshot and found no active mesh-wide degradation.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        assert name == "get_health_snapshot"
+        return {"data": {"status": "healthy"}, "meta": {"tool": name}}
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Which offline nodes look most suspicious right now?",
+            rendered_message="User message: Which offline nodes look most suspicious right now?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == "I checked the current health snapshot and found no active mesh-wide degradation."
+    assert len(result["tool_calls"]) == 1
+    assert result["tool_calls"][0]["name"] == "get_health_snapshot"

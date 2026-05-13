@@ -146,7 +146,16 @@
   .chat-msg.user { background:#172554; color:#dbeafe; margin-left:18px; }
   .chat-msg.agent { background:#102239; color:#e2e8f0; margin-right:18px; }
   .chat-msg.background-check { background:#0f2d20; color:#dcfce7; border:1px solid #166534; }
-  .chat-msg-meta { color: var(--muted); font-size: 11px; margin-bottom: 6px; display:flex; gap:8px; flex-wrap:wrap; }
+  .chat-msg-meta {
+    color: var(--muted); font-size: 11px; margin-bottom: 6px; display:flex;
+    gap:8px; flex-wrap:wrap; align-items:center; justify-content:space-between;
+  }
+  .chat-msg-meta-left, .chat-msg-meta-right { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .chat-copy-btn {
+    background:transparent; color:var(--muted); border:1px solid var(--border);
+    border-radius:6px; padding:3px 7px; font-size:11px; cursor:pointer;
+  }
+  .chat-copy-btn:hover { border-color: var(--accent); color: var(--accent); }
   .chat-composer textarea {
     width:100%; min-height: 88px; resize: vertical; background: var(--panel2); color: var(--fg);
     border:1px solid var(--border); border-radius:10px; padding:10px; font-size:13px;
@@ -972,7 +981,21 @@ function renderChatMessages() {
     const metaBits = [msg.label || (msg.role === 'user' ? 'You' : 'Assistant')];
     if (msg.model) metaBits.push(msg.model);
     if (msg.durationMs != null) metaBits.push(msg.durationMs + 'ms');
-    box.appendChild(el('div', { class: 'chat-msg-meta' }, metaBits.join(' · ')));
+    const meta = el('div', { class: 'chat-msg-meta' });
+    meta.appendChild(el('div', { class: 'chat-msg-meta-left' }, metaBits.join(' · ')));
+    const copyBtn = el('button', { class: 'chat-copy-btn', type: 'button' }, 'Copy');
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(msg.text || '');
+        copyBtn.textContent = 'Copied';
+        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1200);
+      } catch (_) {
+        copyBtn.textContent = 'Failed';
+        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1200);
+      }
+    });
+    meta.appendChild(el('div', { class: 'chat-msg-meta-right' }, copyBtn));
+    box.appendChild(meta);
     box.appendChild(el('div', { html: escapeHtml(msg.text || '').replace(/\n/g, '<br>') }));
     if (Array.isArray(msg.toolCalls) && msg.toolCalls.length) {
       const details = el('details');

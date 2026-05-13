@@ -21,10 +21,13 @@ from . import web_search
 _DIRECT_AGENT_PREFIX = "direct:"
 _MAX_TOOL_ROUNDS = 4
 _MAX_TOOL_CALLS = 8
+_MAX_TOOL_DEFERRAL_RETRIES = 1
 _DEFAULT_SYSTEM_PROMPT = (
     "You are the Thread Observability dashboard troubleshooting assistant. Answer using only the provided "
     "Thread dashboard context, the user's request, and the available diagnostic tools. "
     "Use tools when you need current mesh state, counters, history, or node-specific evidence. "
+    "Do not tell the user to run the available diagnostic tools themselves. If a relevant tool exists, call it "
+    "yourself before answering. "
     "Use web_search only when outside product or protocol context is actually needed. "
     "Prefer a node's friendly/display name when present; on first mention include its EUI64 only when that helps "
     "disambiguate. Ground conclusions in tool output, clearly separate observed facts from hypotheses, and mention "
@@ -261,6 +264,24 @@ def _extract_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _looks_like_tool_deferral(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    patterns = (
+        "you can use the",
+        "you can use",
+        "use the \"",
+        "use the get_",
+        "to investigate further, you can use",
+        "it's also a good idea to check",
+        "you should use the",
+    )
+    if any(pattern in normalized for pattern in patterns):
+        return True
+    return any(tool_name in normalized for tool_name in ("get_mesh_state", "analyze_node", "get_counter_series", "query_history"))
+
+
 async def _dispatch_chat_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     from ..api import mcp_tools
 
@@ -302,6 +323,7 @@ async def direct_chat_turn(
     tools = _chat_tools()
     tool_trace: list[dict[str, Any]] = []
     tool_calls_used = 0
+    tool_deferral_retries = 0
     final_text = ""
 
     for _ in range(_MAX_TOOL_ROUNDS + 1):
@@ -325,7 +347,20 @@ async def direct_chat_turn(
             }
         )
         if not tool_calls:
-            final_text = _extract_message_text(payload)
+            candidate_text = _extract_message_text(payload)
+            if tool_deferral_retries < _MAX_TOOL_DEFERRAL_RETRIES and _looks_like_tool_deferral(candidate_text):
+                tool_deferral_retries += 1
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Do not tell me to use the available tools myself. Call the relevant tools now, then "
+                            "answer from the observed results."
+                        ),
+                    }
+                )
+                continue
+            final_text = candidate_text
             break
 
         for tool_call in tool_calls:

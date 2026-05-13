@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.9 — Chat copy button and auto-tool-use retry
+
+- **Copy message button.** Each chat message in the dashboard now includes a
+  `Copy` action for quick reuse of assistant output.
+- **Tool deferral retry.** When direct-model chat replies by telling the user
+  to use available diagnostic tools instead of calling them, the backend now
+  retries once with an explicit instruction to use the tools itself first.
+- **Regression coverage.** Added focused coverage for the tool-deferral retry
+  path and a source-level dashboard smoke check for the copy button.
+
 ## 0.11.8 — Separate prompt tuning for chat and assessment
 
 - **Direct chat prompt tuning.** The dashboard assistant is now explicitly

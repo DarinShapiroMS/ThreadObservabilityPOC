@@ -20,6 +20,7 @@ def test_dashboard_serves_assessment_and_chat_shell() -> None:
     assert 'id="chat-card"' in html
     assert 'id="chat-agent-select"' in html
     assert 'id="chat-send-btn"' in html
+    assert 'chat-copy-btn' in html
 
 
 def test_dashboard_wires_expected_dashboard_endpoints() -> None:
