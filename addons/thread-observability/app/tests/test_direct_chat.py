@@ -253,46 +253,56 @@ def test_direct_chat_turn_retries_for_node_question_without_history_context(monk
                 ]
             }
         if len(calls) == 3:
-            retry_message = next(
-                msg for msg in calls[2]["messages"]
-                if msg.get("role") == "user" and "node-specific troubleshooting question" in str(msg.get("content") or "")
-            )
-            assert retry_message["role"] == "user"
-            assert "node-specific troubleshooting question" in retry_message["content"]
             return {
                 "choices": [
                     {
                         "message": {
                             "role": "assistant",
-                            "content": "",
-                            "tool_calls": [
-                                {
-                                    "id": "call-2",
-                                    "type": "function",
-                                    "function": {"name": "query_history", "arguments": '{"eui64":"e6684b9903e8970f"}'},
-                                }
-                            ],
+                            "content": "The node is online now, but recent history shows a very recent re-attach or partition-related change that matters for troubleshooting.",
                         }
                     }
                 ]
             }
-        assert len(calls) == 4
+
+        assert len(calls) == 3
         return {
-            "choices": [
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": "The node is online now, but recent history shows a very recent change that matters for troubleshooting.",
-                    }
-                }
-            ]
+            "choices": []
         }
 
     async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
         if name == "analyze_node":
-            return {"data": {"node": {"eui64": arguments["eui64"]}}, "meta": {"tool": name}}
+            return {
+                "eui64": arguments["eui64"],
+                "node": {
+                    "eui64": arguments["eui64"],
+                    "friendly_name": "Family Room Track Lights",
+                    "partition_id": 1846206278,
+                    "attach_attempt_count": 1,
+                    "partition_id_change_count": 1,
+                },
+                "timeline": [{"ts": "2026-05-13T15:00:00Z", "kind": "re_attached_node"}],
+                "open_issues": [],
+                "recent_issues": [],
+                "physical_identity": None,
+            }
         if name == "query_history":
-            return {"data": {"events": [{"event_type": "status_change"}]}, "meta": {"tool": name}}
+            assert arguments["eui64"] == "e6684b9903e8970f"
+            assert "since" in arguments
+            return [{"ts": "2026-05-13T15:00:00Z", "kind": "re_attached_node", "details": {"partition_id": 2107240925}}]
+        if name == "get_mesh_state":
+            assert arguments["freshness_minutes"] == 120
+            return {
+                "computed_at": "2026-05-13T15:05:00Z",
+                "partition_id": 1846206278,
+                "nodes": [
+                    {
+                        "eui64": "e6684b9903e8970f",
+                        "partition_id": 1846206278,
+                        "status": "online",
+                    }
+                ],
+                "links": [],
+            }
         raise AssertionError(f"unexpected tool {name}")
 
     monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
@@ -307,5 +317,5 @@ def test_direct_chat_turn_retries_for_node_question_without_history_context(monk
         )
     )
 
-    assert result["response"]["text"] == "The node is online now, but recent history shows a very recent change that matters for troubleshooting."
-    assert [row["name"] for row in result["tool_calls"]] == ["analyze_node", "query_history"]
+    assert result["response"]["text"] == "The node is online now, but recent history shows a very recent re-attach or partition-related change that matters for troubleshooting."
+    assert [row["name"] for row in result["tool_calls"]] == ["analyze_node", "query_history", "get_mesh_state"]

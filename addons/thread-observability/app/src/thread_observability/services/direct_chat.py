@@ -8,9 +8,11 @@ Home Assistant's Assist agent layer.
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -52,6 +54,8 @@ _CHAT_TOOL_EXCLUDE: frozenset[str] = frozenset(
     }
 )
 _WEB_SEARCH_TOOL_NAME = "web_search"
+_NODE_EUI64_RE = re.compile(r"\b([0-9a-f]{16})\b", re.IGNORECASE)
+_NODE_HISTORY_WINDOW = timedelta(hours=2)
 
 
 class DirectChatConfigError(ValueError):
@@ -303,6 +307,133 @@ def _has_sufficient_node_evidence(tool_trace: list[dict[str, Any]]) -> bool:
     return bool(names & {"query_history", "get_mesh_state", "start_triage", "list_all_nodes"})
 
 
+def _extract_node_eui64(message: str, tool_trace: list[dict[str, Any]]) -> str | None:
+    for row in reversed(tool_trace):
+        if str(row.get("name") or "") != "analyze_node":
+            continue
+        arguments = row.get("arguments") if isinstance(row.get("arguments"), dict) else {}
+        eui64 = str(arguments.get("eui64") or "").strip().lower()
+        if eui64:
+            return eui64
+    match = _NODE_EUI64_RE.search(str(message or ""))
+    if match:
+        return match.group(1).lower()
+    return None
+
+
+def _compact_node_history(result: dict[str, Any]) -> dict[str, Any]:
+    node = result.get("node") if isinstance(result.get("node"), dict) else {}
+    physical_identity = result.get("physical_identity") if isinstance(result.get("physical_identity"), dict) else None
+    open_issues = result.get("open_issues") if isinstance(result.get("open_issues"), list) else []
+    recent_issues = result.get("recent_issues") if isinstance(result.get("recent_issues"), list) else []
+    timeline = result.get("timeline") if isinstance(result.get("timeline"), list) else []
+    return {
+        "eui64": result.get("eui64"),
+        "node": {
+            "friendly_name": node.get("friendly_name"),
+            "status": node.get("status"),
+            "status_changed_at": node.get("status_changed_at"),
+            "last_seen": node.get("last_seen"),
+            "partition_id": node.get("partition_id"),
+            "parent_change_count": node.get("parent_change_count"),
+            "attach_attempt_count": node.get("attach_attempt_count"),
+            "partition_id_change_count": node.get("partition_id_change_count"),
+            "better_partition_attach_attempt_count": node.get("better_partition_attach_attempt_count"),
+        },
+        "physical_identity": physical_identity,
+        "open_issue_kinds": [issue.get("kind") for issue in open_issues if isinstance(issue, dict) and issue.get("kind")],
+        "recent_issue_kinds": [issue.get("kind") for issue in recent_issues if isinstance(issue, dict) and issue.get("kind")],
+        "timeline": timeline[:12],
+    }
+
+
+def _compact_mesh_view(result: dict[str, Any], eui64: str) -> dict[str, Any]:
+    nodes = result.get("nodes") if isinstance(result.get("nodes"), list) else []
+    links = result.get("links") if isinstance(result.get("links"), list) else []
+    node_row = next((row for row in nodes if isinstance(row, dict) and row.get("eui64") == eui64), None)
+    node_links = [
+        row for row in links
+        if isinstance(row, dict)
+        and (row.get("reporter_eui64") == eui64 or row.get("neighbor_eui64") == eui64)
+    ][:12]
+    partitions = sorted({row.get("partition_id") for row in nodes if isinstance(row, dict) and row.get("partition_id") is not None})
+    return {
+        "computed_at": result.get("computed_at"),
+        "partition_id": result.get("partition_id"),
+        "all_partitions": partitions,
+        "node": node_row,
+        "links": node_links,
+    }
+
+
+async def _gather_backend_node_evidence(message: str, tool_trace: list[dict[str, Any]]) -> dict[str, Any] | None:
+    eui64 = _extract_node_eui64(message, tool_trace)
+    if not eui64:
+        return None
+
+    gathered: list[dict[str, Any]] = []
+
+    if not any(str(row.get("name") or "") == "analyze_node" for row in tool_trace):
+        arguments = {"eui64": eui64, "timeline_hours": 6}
+        result = await _dispatch_chat_tool("analyze_node", arguments)
+        tool_trace.append(
+            {
+                "id": f"backend-{uuid.uuid4()}",
+                "type": "function",
+                "name": "analyze_node",
+                "arguments": arguments,
+                "result": result,
+            }
+        )
+        gathered.append({"tool": "analyze_node", "arguments": arguments, "result": _compact_node_history(result)})
+
+    history_since = (datetime.now(tz=UTC) - _NODE_HISTORY_WINDOW).isoformat()
+    history_arguments = {"eui64": eui64, "since": history_since, "limit": 100}
+    history_result = await _dispatch_chat_tool("query_history", history_arguments)
+    tool_trace.append(
+        {
+            "id": f"backend-{uuid.uuid4()}",
+            "type": "function",
+            "name": "query_history",
+            "arguments": history_arguments,
+            "result": history_result,
+        }
+    )
+    history_rows = history_result if isinstance(history_result, list) else []
+    gathered.append(
+        {
+            "tool": "query_history",
+            "arguments": history_arguments,
+            "result": history_rows[:20],
+        }
+    )
+
+    mesh_arguments = {"freshness_minutes": max(1, int(_NODE_HISTORY_WINDOW.total_seconds() // 60))}
+    mesh_result = await _dispatch_chat_tool("get_mesh_state", mesh_arguments)
+    tool_trace.append(
+        {
+            "id": f"backend-{uuid.uuid4()}",
+            "type": "function",
+            "name": "get_mesh_state",
+            "arguments": mesh_arguments,
+            "result": mesh_result,
+        }
+    )
+    gathered.append(
+        {
+            "tool": "get_mesh_state",
+            "arguments": mesh_arguments,
+            "result": _compact_mesh_view(mesh_result, eui64),
+        }
+    )
+
+    return {
+        "eui64": eui64,
+        "history_since": history_since,
+        "gathered": gathered,
+    }
+
+
 async def _dispatch_chat_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     from ..api import mcp_tools
 
@@ -385,15 +516,21 @@ async def direct_chat_turn(
                 continue
             if node_question and node_evidence_retries < _MAX_NODE_EVIDENCE_RETRIES and not _has_sufficient_node_evidence(tool_trace):
                 node_evidence_retries += 1
+                evidence = await _gather_backend_node_evidence(message, tool_trace)
+                evidence_message = (
+                    "This is a node-specific troubleshooting question. Use the authoritative backend evidence "
+                    "below before answering. Do not describe the node as long-stable if the recent evidence "
+                    "shows a fresh attach, recommission, parent change, partition transition, or other recent "
+                    "state change. Explicitly call out recent-change evidence when present.\n\n"
+                    + json.dumps(evidence, separators=(",", ":"), ensure_ascii=True)
+                    if evidence is not None
+                    else "This is a node-specific troubleshooting question. Gather node-specific and recent-change "
+                    "evidence yourself before answering."
+                )
                 messages.append(
                     {
-                        "role": "user",
-                        "content": (
-                            "This is a node-specific troubleshooting question. Before answering, gather node-specific "
-                            "and recent-change evidence yourself. Call analyze_node for the node, plus at least one "
-                            "history or topology tool such as query_history, get_mesh_state, or start_triage, then "
-                            "answer from those observed results."
-                        ),
+                        "role": "system",
+                        "content": evidence_message,
                     }
                 )
                 continue

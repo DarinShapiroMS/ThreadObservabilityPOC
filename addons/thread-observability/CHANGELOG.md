@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.11 — Force recent evidence for node answers
+
+- **Backend recent-evidence enrichment.** For node-specific chat questions, the backend no longer relies on the model to choose and parameterize recent-history checks correctly. If the first answer is shallow, it now gathers recent node history and current mesh context server-side before asking the model to answer again.
+- **Partition-change awareness.** The retry path now injects a bounded recent timeline window and current mesh-partition view so the model is less likely to describe a recently recommissioned node as long-stable.
+- **Regression coverage.** Updated direct-chat tests to cover the backend-managed node-evidence retry flow.
+
 ## 0.11.10 — Better evidence gathering for node questions
 
 - **Node-specific retry.** When direct-model chat answers a node question with
