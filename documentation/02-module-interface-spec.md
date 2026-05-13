@@ -49,6 +49,11 @@ Behavior:
 - Rejects `streaming=true` with `501` for forward compatibility; sync-only in v1.
 - When `agent_id` is a Home Assistant agent (or omitted and the default backend is HA), uses the Supervisor token to proxy to HA Core's conversation API.
 - When `agent_id` is `direct:<provider>` (or omitted and the default backend is configured as direct), calls the configured provider directly through an OpenAI-compatible `/chat/completions` API.
+- In direct mode, the backend exposes a curated read-only MCP tool subset to the
+    model (`start_triage`, `get_mesh_state`, `get_health_snapshot`,
+    `list_active_issues`, `list_all_nodes`, `list_thread_datasets`,
+    `query_history`, `analyze_node`, `get_counter_series`,
+    `compare_node_counters`) and executes those calls server-side.
 - Returns `412` when the selected backend is not fully configured.
 - Returns `502` when the upstream model provider rejects the request.
 

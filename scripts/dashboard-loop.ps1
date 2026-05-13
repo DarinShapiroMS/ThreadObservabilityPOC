@@ -14,6 +14,7 @@ if (-not (Test-Path $Python)) {
 }
 
 $Targets = @(
+    'tests/test_direct_chat.py'
     'tests/test_dashboard_http.py'
     'tests/test_chat_http.py'
     'tests/test_assessment_http.py'

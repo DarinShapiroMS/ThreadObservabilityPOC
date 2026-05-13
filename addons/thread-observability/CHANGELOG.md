@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.4 — Direct chat tool calling
+
+- **Direct model reasoning can now use MCP tools.** The direct-model chat path
+  exposes a curated read-only subset of the add-on's MCP tools and executes
+  tool calls server-side instead of relying on Home Assistant Assist.
+- **Bounded orchestration loop.** Direct chat now runs a capped function-call
+  loop and returns the tool trace to the dashboard so users can see what data
+  the model used.
+- **Fast test loop updated.** `scripts/dashboard-loop.ps1` now includes the new
+  direct chat orchestration unit tests.
+
 ## 0.11.3 — Direct model chat fallback
 
 - **Direct model chat path.** Dashboard chat can now route directly to a
