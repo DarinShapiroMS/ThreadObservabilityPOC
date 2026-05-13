@@ -29,6 +29,7 @@ from ..pipeline import reasoner as reasoner_mod
 from ..pipeline import routing as routing_mod
 from ..pipeline import runner as pipeline_runner
 from ..pipeline import topology as topology_mod
+from ..services import direct_chat
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
 
@@ -279,16 +280,36 @@ def create_core_app() -> FastAPI:
 
     @app.get("/v1/chat/agents")
     async def chat_agents() -> dict[str, object]:
+        cfg = get_config()
+        direct_target = direct_chat.resolve_direct_chat_target(cfg.ai)
+        agents: list[dict[str, object]] = []
+        source_parts: list[str] = []
         try:
-            return await supervisor_client.list_conversation_agents()
+            payload = await supervisor_client.list_conversation_agents()
+            agents.extend(payload.get("agents") or [])
+            source = payload.get("source")
+            if source:
+                source_parts.append(str(source))
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to list conversation agents: {exc}",
-            ) from exc
+            if direct_target is None:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Failed to list conversation agents: {exc}",
+                ) from exc
+        if direct_target is not None:
+            agents.insert(0, direct_chat.direct_agent_row(direct_target))
+            source_parts.append("direct")
+        return {
+            "agents": agents,
+            "count": len(agents),
+            "source": "+".join(source_parts) if source_parts else None,
+            "default_backend": direct_chat.default_chat_backend(cfg.ai, direct_target),
+            "default_label": direct_chat.default_chat_label(cfg.ai, direct_target),
+        }
 
     @app.post("/v1/chat/turn")
     async def chat_turn(payload: dict[str, object]) -> dict[str, object]:
+        cfg = get_config()
         message = str((payload or {}).get("message") or "").strip()
         if not message:
             raise HTTPException(
@@ -307,11 +328,39 @@ def create_core_app() -> FastAPI:
         agent_id = str(agent_id).strip() if agent_id else None
         page_context = (payload or {}).get("page_context")
         page_context = page_context if isinstance(page_context, dict) else None
+        rendered_message = _render_chat_message(message, page_context)
+        direct_target = direct_chat.resolve_direct_chat_target(cfg.ai)
+
+        if direct_chat.direct_chat_preferred(cfg.ai, agent_id, direct_target):
+            try:
+                target = direct_target or direct_chat.require_direct_chat_target(cfg.ai)
+                return await direct_chat.direct_chat_turn(
+                    target=target,
+                    message=message,
+                    rendered_message=rendered_message,
+                    conversation_id=conversation_id,
+                )
+            except direct_chat.DirectChatConfigError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_412_PRECONDITION_FAILED,
+                    detail=str(exc),
+                ) from exc
+            except httpx.HTTPStatusError as exc:
+                detail = exc.response.text if exc.response is not None else str(exc)
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Direct model chat failed: {detail}",
+                ) from exc
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Direct model chat failed: {exc}",
+                ) from exc
 
         started = time.perf_counter()
         try:
             upstream = await supervisor_client.conversation_process(
-                text=_render_chat_message(message, page_context),
+                text=rendered_message,
                 conversation_id=conversation_id,
                 agent_id=agent_id,
             )
@@ -561,6 +610,8 @@ def create_core_app() -> FastAPI:
             cfg = get_config().model_dump()
             if cfg.get("influx", {}).get("token"):
                 cfg["influx"]["token"] = "***"
+            if cfg.get("ai", {}).get("api_key"):
+                cfg["ai"]["api_key"] = "***"
         except Exception as exc:  # noqa: BLE001
             cfg = {"error": str(exc)}
         try:

@@ -660,6 +660,7 @@ let assessmentBannerHiddenId = null;
 let activeAssessmentFindingId = null;
 let selectedNodeEui = null;
 let lastChatAgents = [];
+let chatDefaultLabel = 'Home Assistant default';
 let chatSending = false;
 const chatState = { conversationId: null, messages: [] };
 let nodesSort = { key: null, dir: 'asc' };  // null => server "worst first" default
@@ -988,7 +989,7 @@ function renderChatAgents() {
   const select = $('#chat-agent-select');
   if (!select) return;
   const current = select.value;
-  select.innerHTML = '<option value="">Home Assistant default</option>';
+  select.innerHTML = '<option value="">' + escapeHtml(chatDefaultLabel || 'Home Assistant default') + '</option>';
   for (const agent of lastChatAgents) {
     const opt = document.createElement('option');
     opt.value = agent.agent_id;
@@ -1002,9 +1003,11 @@ async function refreshChatAgents() {
   try {
     const payload = await fetchJSON('v1/chat/agents');
     lastChatAgents = Array.isArray(payload.agents) ? payload.agents : [];
+    chatDefaultLabel = payload.default_label || 'Home Assistant default';
     renderChatAgents();
   } catch (_) {
     lastChatAgents = [];
+    chatDefaultLabel = 'Home Assistant default';
     renderChatAgents();
   }
 }

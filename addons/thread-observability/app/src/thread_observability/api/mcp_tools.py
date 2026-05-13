@@ -1119,6 +1119,8 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 payload["ha_admin_token"] = "***"
             if payload.get("influx", {}).get("token"):
                 payload["influx"]["token"] = "***"
+            if payload.get("ai", {}).get("api_key"):
+                payload["ai"]["api_key"] = "***"
             return payload
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}

@@ -119,22 +119,25 @@ def test_phase2_catalog_shape() -> None:
     assert not missing, f"Phase 2 renamed tools missing: {sorted(missing)}"
 
 def test_get_config_redacts_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ha_admin_token and influx.token must never appear in plaintext."""
+    """Secret-bearing config fields must never appear in plaintext."""
     from thread_observability import config as cfg_mod
 
     fake = cfg_mod.ThreadObsConfig(
         ha_admin_token="SECRET-LLT-XYZ",
+        ai=cfg_mod.AIConfig(enabled=True, provider="cerebras", api_key="SECRET-AI-KEY"),
         influx=cfg_mod.InfluxConfig(token="SECRET-INFLUX-TOKEN"),
     )
     monkeypatch.setattr(mcp_tools, "get_config", lambda: fake)
 
     out = asyncio.run(mcp_tools._dispatch_tool("get_config", {}))
     assert out["ha_admin_token"] == "***"
+    assert out["ai"]["api_key"] == "***"
     assert out["influx"]["token"] == "***"
     # Confirm no plaintext leak anywhere in the dumped payload
     import json as _json
     blob = _json.dumps(out)
     assert "SECRET-LLT-XYZ" not in blob
+    assert "SECRET-AI-KEY" not in blob
     assert "SECRET-INFLUX-TOKEN" not in blob
 
 

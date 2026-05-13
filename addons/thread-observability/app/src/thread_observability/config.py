@@ -27,7 +27,12 @@ class RetentionConfig(BaseModel):
 
 class AIConfig(BaseModel):
     enabled: bool = False
-    provider: str = Field(default="local")
+    provider: str = Field(default_factory=lambda: os.getenv("THREAD_OBS_AI_PROVIDER", "local"))
+    chat_backend: str = Field(default_factory=lambda: os.getenv("THREAD_OBS_CHAT_BACKEND", "ha"))
+    model: str = Field(default_factory=lambda: os.getenv("THREAD_OBS_AI_MODEL", ""))
+    base_url: str = Field(default_factory=lambda: os.getenv("THREAD_OBS_AI_BASE_URL", ""))
+    api_key: str = Field(default_factory=lambda: os.getenv("THREAD_OBS_AI_API_KEY", ""), repr=False)
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
 
 
 class AssessmentConfig(BaseModel):
