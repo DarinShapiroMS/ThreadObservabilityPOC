@@ -42,7 +42,7 @@ def test_read_tool_response_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
     assert out["data"] == {"nodes": [{"eui64": "abc"}], "count": 1}
     meta = out["meta"]
     assert meta["tool"] == "list_all_nodes"
-    assert meta["data_source"] == "sqlite_cache"
+    assert meta["data_source"] == "persisted_state"
     assert meta["pipeline_tick"]["tick_count"] == 42
     assert meta["stale_after_s"] == 60.0
     # as_of is ISO-8601 parseable

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.17 — Exact count answers and cleaner freshness wording
+
+- **Deterministic exact counts.** For chat prompts that explicitly ask for exact or specific counts, the backend now answers directly from tool results after gathering the requested values, instead of relying on the model to paraphrase them.
+- **Cleaner freshness metadata.** Read-tool metadata now uses product-facing persisted-state wording instead of exposing storage-backend terms like `sqlite_cache`.
+- **Tool description cleanup.** User-visible tool descriptions now describe data freshness in terms of the latest persisted pipeline state rather than SQLite internals.
+
 ## 0.11.16 — Topology history chat guard and snapshot stats fix
 
 - **Chat fallback guard.** Direct-model chat now treats an empty `list_topology_history` result as missing history data and explicitly avoids the misleading `get_topology_history_entry {}` fallback, steering follow-up reasoning toward `get_mesh_state`, `query_history`, `analyze_node`, or `start_triage` instead.

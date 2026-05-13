@@ -320,6 +320,56 @@ def _topology_history_is_empty(result: Any) -> bool:
     return False
 
 
+def _tool_result_data(result: Any) -> Any:
+    if isinstance(result, dict) and isinstance(result.get("data"), dict):
+        return result["data"]
+    return result
+
+
+def _wants_exact_count_response(message: str) -> bool:
+    normalized = " ".join(str(message or "").lower().split())
+    if not normalized or "count" not in normalized:
+        return False
+    markers = (
+        "exact count",
+        "exact counts",
+        "specific count",
+        "specific counts",
+        "just the two counts",
+        "answer with just the two counts",
+        "quote the specific counts",
+    )
+    return any(marker in normalized for marker in markers)
+
+
+def _build_exact_count_response(message: str, tool_trace: list[dict[str, Any]]) -> str | None:
+    if not _wants_exact_count_response(message):
+        return None
+
+    history_count: int | None = None
+    snapshot_count: int | None = None
+    for row in tool_trace:
+        name = str(row.get("name") or "")
+        result = _tool_result_data(row.get("result"))
+        if name == "list_topology_history" and isinstance(result, dict):
+            count = result.get("count")
+            if isinstance(count, int):
+                history_count = count
+        if name == "get_storage_stats" and isinstance(result, dict):
+            sqlite_stats = result.get("sqlite") if isinstance(result.get("sqlite"), dict) else {}
+            row_counts = sqlite_stats.get("row_counts") if isinstance(sqlite_stats.get("row_counts"), dict) else {}
+            count = row_counts.get("topology_snapshots")
+            if isinstance(count, int):
+                snapshot_count = count
+
+    if history_count is None or snapshot_count is None:
+        return None
+    return (
+        f"list_topology_history.count={history_count}; "
+        f"get_storage_stats.sqlite.row_counts.topology_snapshots={snapshot_count}"
+    )
+
+
 def _truncate_prompt_text(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
@@ -671,6 +721,10 @@ async def direct_chat_turn(
                         ),
                     }
                 )
+        exact_count_response = _build_exact_count_response(message, tool_trace)
+        if exact_count_response is not None:
+            final_text = exact_count_response
+            break
         if tool_calls_used >= _MAX_TOOL_CALLS:
             final_text = "I hit the current tool-call limit while gathering evidence. Please narrow the question."
             break

@@ -485,3 +485,70 @@ def test_direct_chat_turn_guides_away_from_empty_topology_history_fallback(monke
 
     assert result["response"]["text"] == "There are no persisted topology snapshots for that window, so I used current mesh state instead."
     assert [row["name"] for row in result["tool_calls"]] == ["list_topology_history", "get_mesh_state"]
+
+
+def test_direct_chat_turn_returns_exact_counts_from_tool_results(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-topo",
+                                "type": "function",
+                                "function": {"name": "list_topology_history", "arguments": '{"limit": 100}'},
+                            },
+                            {
+                                "id": "call-stats",
+                                "type": "function",
+                                "function": {"name": "get_storage_stats", "arguments": "{}"},
+                            },
+                        ],
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        if name == "list_topology_history":
+            return {"data": {"snapshots": [{"id": 71}], "count": 71}, "meta": {"tool": name}}
+        if name == "get_storage_stats":
+            return {
+                "data": {
+                    "sqlite": {"row_counts": {"topology_snapshots": 71}},
+                },
+                "meta": {"tool": name},
+            }
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Call list_topology_history and get_storage_stats, then answer with just the two counts.",
+            rendered_message="User message: Call list_topology_history and get_storage_stats, then answer with just the two counts.",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == (
+        "list_topology_history.count=71; "
+        "get_storage_stats.sqlite.row_counts.topology_snapshots=71"
+    )
+    assert [row["name"] for row in result["tool_calls"]] == ["list_topology_history", "get_storage_stats"]
+    assert len(calls) == 1

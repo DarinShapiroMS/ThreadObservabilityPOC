@@ -64,7 +64,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "the SQLite event log and most-recent Matter discovery tick. Phantom nodes are excluded by default. "
             "Returns: {nodes:[{eui64, role, partition_id, parent_eui64, last_rssi, last_lqi, status, ...}], "
             "links:[...], partition_id, computed_at, node_count, link_count}. "
-            "Caveats: SQLite-cached. Check meta.cache_age_s on the response; if stale, call ingest_now to force "
+            "Caveats: derived from the latest persisted pipeline state. Check meta.cache_age_s on the response; if stale, call ingest_now to force "
             "a refresh."
         ),
         "inputSchema": {
@@ -499,7 +499,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "Use when: enumerating every known Thread node (including phantoms) or building a device-by-device inventory. "
             "Returns: {nodes:[{eui64, friendly_name, role, area, device_id, status, first_seen, last_seen, last_rssi, last_lqi, ...}], count}. "
             "Ordered most-recently-seen first. Use ``status_filter='phantom'`` to drill into stale-reference cleanup candidates. "
-            "Caveats: SQLite-cached; check meta.cache_age_s."
+            "Caveats: sourced from the latest persisted pipeline state; check meta.cache_age_s."
         ),
         "inputSchema": {
             "type": "object",
@@ -861,7 +861,7 @@ def _meta(name: str) -> dict[str, Any]:
     return {
         "tool": name,
         "as_of": _utc_now(),
-        "data_source": "sqlite_cache",
+        "data_source": "persisted_state",
         "cache_age_s": cache_age_s,
         "stale_after_s": stale_after_s,
         "pipeline_tick": {
