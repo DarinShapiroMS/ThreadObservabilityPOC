@@ -58,28 +58,84 @@ def get_latest_signal_strength(node_eui64: str, store: SQLiteStore | None = None
     Matter NeighborTable entries (in the ``links`` table) give per-edge
     ``rssi_avg`` and ``lqi_in`` reported by routers about this node. We pick
     the strongest incoming edge (link where ``neighbor_eui64 = node``) as the
-    representative signal. If no link data is available, fall back to the
-    event log (legacy OTBR-log path).
+    representative signal and remember **which router reported it** so the
+    UI can show "best heard by <router>".
+
+    The returned dict also includes ``neighbors``: every reporter for this
+    node with their RSSI/LQI, sorted strongest first. End devices typically
+    have one (their parent); routers/REEDs/leader will have multiple.
+
+    If no link data is available, fall back to the event log (legacy OTBR
+    log path) — in that case ``best_reporter`` will be ``None``.
     """
     s = store or get_store()
 
     # ---- prefer link-table data (Matter cluster 53) ----
     with s._lock:  # noqa: SLF001
         rows = s._conn.execute(  # noqa: SLF001
-            "SELECT rssi_avg, rssi_last, lqi_in, lqi_out FROM links"
-            " WHERE neighbor_eui64 = ?",
+            "SELECT reporter_eui64, rssi_avg, rssi_last, lqi_in, lqi_out,"
+            "       is_child, source"
+            "  FROM links WHERE neighbor_eui64 = ?",
             (node_eui64,),
         ).fetchall()
-    rssi_vals = [int(r["rssi_avg"]) for r in rows if r["rssi_avg"] is not None]
-    lqi_vals = [int(r["lqi_in"]) for r in rows if r["lqi_in"] is not None]
+    rows = [dict(r) for r in rows]
+    rssi_vals = [int(r["rssi_avg"]) for r in rows if r.get("rssi_avg") is not None]
+    lqi_vals = [int(r["lqi_in"]) for r in rows if r.get("lqi_in") is not None]
     if rssi_vals or lqi_vals:
-        best_rssi = max(rssi_vals) if rssi_vals else None  # highest = strongest
-        best_lqi = max(lqi_vals) if lqi_vals else None
+        # Build a per-reporter rollup so we can name the strongest neighbor.
+        # When the same reporter appears in both neighbor_table and
+        # route_table we keep the strongest RSSI seen.
+        per_reporter: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            rep = r.get("reporter_eui64")
+            if not rep:
+                continue
+            slot = per_reporter.setdefault(rep, {
+                "eui64": rep, "rssi": None, "lqi": None, "is_child": False,
+            })
+            rssi = r.get("rssi_avg")
+            lqi = r.get("lqi_in")
+            if rssi is not None and (slot["rssi"] is None or rssi > slot["rssi"]):
+                slot["rssi"] = int(rssi)
+            if lqi is not None and (slot["lqi"] is None or lqi > slot["lqi"]):
+                slot["lqi"] = int(lqi)
+            if r.get("is_child"):
+                slot["is_child"] = True
+        # Resolve names (one query, batched).
+        if per_reporter:
+            placeholders = ",".join("?" for _ in per_reporter)
+            with s._lock:  # noqa: SLF001
+                name_rows = s._conn.execute(  # noqa: SLF001
+                    "SELECT eui64, friendly_name FROM nodes"
+                    f" WHERE eui64 IN ({placeholders})",
+                    list(per_reporter.keys()),
+                ).fetchall()
+            for nr in name_rows:
+                d = dict(nr)
+                eui = d.get("eui64")
+                if eui in per_reporter:
+                    per_reporter[eui]["name"] = d.get("friendly_name")
+        neighbors = sorted(
+            per_reporter.values(),
+            key=lambda x: (x["rssi"] is None, -(x["rssi"] or -999)),
+        )
+        best = neighbors[0] if neighbors and neighbors[0]["rssi"] is not None else None
+        best_reporter = None
+        if best:
+            best_reporter = {
+                "eui64": best["eui64"],
+                "name": best.get("name"),
+                "rssi": best["rssi"],
+                "lqi": best.get("lqi"),
+                "is_child": bool(best.get("is_child")),
+            }
         return {
-            "rssi": best_rssi,
-            "lqi": best_lqi,
+            "rssi": (max(rssi_vals) if rssi_vals else None),
+            "lqi": (max(lqi_vals) if lqi_vals else None),
             "rssi_avg": (sum(rssi_vals) // len(rssi_vals)) if rssi_vals else None,
             "lqi_avg": (sum(lqi_vals) // len(lqi_vals)) if lqi_vals else None,
+            "best_reporter": best_reporter,
+            "neighbors": neighbors,
             "source": "links",
         }
 
@@ -92,6 +148,8 @@ def get_latest_signal_strength(node_eui64: str, store: SQLiteStore | None = None
         "lqi": lqi_samples[0] if lqi_samples else None,
         "rssi_avg": sum(rssi_samples) // len(rssi_samples) if rssi_samples else None,
         "lqi_avg": sum(lqi_samples) // len(lqi_samples) if lqi_samples else None,
+        "best_reporter": None,
+        "neighbors": [],
         "source": "events" if rssi_samples or lqi_samples else None,
     }
 

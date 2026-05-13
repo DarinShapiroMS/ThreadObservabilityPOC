@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.10.3 — RSSI: name the strongest reporter
+
+The Network-tab Nodes table previously showed each node's RSSI/LQI as a
+naked dBm number with no indication of *who* was reporting that signal.
+Because the value comes from the strongest entry in any router's Matter
+NeighborTable (cluster 53), the implicit "via" is meaningful — for end
+devices it's the parent, for routers it's the strongest peer, and across
+the whole table it sketches the mesh shape.
+
+**Changes:**
+- `pipeline.nodes.get_latest_signal_strength` now also returns
+  `best_reporter` (`{eui64, name, rssi, lqi, is_child}`) and a full
+  `neighbors` list sorted strongest first. Same SQL query — we already
+  scanned every link row, we just kept the reporter column.
+- Nodes-table RSSI cell adds a "heard by &lt;name&gt;" sub-caption
+  naming the strongest reporting router. End devices show their parent
+  (matches the Role-column "via …"); routers show the strongest peer.
+- Hover the RSSI cell to see every reporter with its RSSI/LQI, sorted
+  best→worst — useful for routers/REEDs where multiple peers report.
+
 ## 0.10.2 — Network tab: deeper insight
 
 The Network tab was showing data but not surfacing what to act on. This

@@ -892,7 +892,35 @@ function renderNodesTable(nodes) {
     }
     roleCell.innerHTML = roleHtml;
 
-    const rssiCell = el('td', {class: rssiClass(rssi)}, rssi == null ? '—' : (rssi + ' dBm'));
+    // RSSI cell + "heard by <name>" sub-caption naming the strongest
+    // reporting router. For SED/FED that's effectively the parent; for
+    // routers it's the strongest peer that has them in its NeighborTable.
+    // Tooltip lists every reporter so you can see the full neighbor set.
+    const best = sig.best_reporter;
+    const allRep = sig.neighbors || [];
+    let rssiHtml;
+    if (rssi == null) {
+      rssiHtml = '—';
+    } else {
+      rssiHtml = escapeHtml(rssi + ' dBm');
+      if (best) {
+        const repName = best.name || (best.eui64 || '').slice(-4).toUpperCase();
+        const tag = best.is_child ? ' (child)' : '';
+        rssiHtml += '<div class="parent-hint">heard by ' + escapeHtml(repName) + tag + '</div>';
+      }
+    }
+    let rssiTip = '';
+    if (allRep.length) {
+      const lines = allRep.map(r => {
+        const nm = r.name || (r.eui64 || '').slice(-4).toUpperCase();
+        const rs = r.rssi != null ? (r.rssi + ' dBm') : '? dBm';
+        const lq = r.lqi != null ? (' lqi ' + r.lqi) : '';
+        const ch = r.is_child ? ' (child)' : '';
+        return nm + ': ' + rs + lq + ch;
+      });
+      rssiTip = 'Reporters (best→worst):\n' + lines.join('\n');
+    }
+    const rssiCell = el('td', {class: rssiClass(rssi), title: rssiTip, html: rssiHtml});
     const lqiCell = el('td', {class: lqiClass(lqi)}, lqi == null ? '—' : String(lqi));
 
     // Phase 4 delta cells.
