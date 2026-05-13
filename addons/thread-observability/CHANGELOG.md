@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.11.8 — Separate prompt tuning for chat and assessment
+
+- **Direct chat prompt tuning.** The dashboard assistant is now explicitly
+  optimized for interactive troubleshooting: gather obvious context, compare
+  competing hypotheses, and explain what evidence would distinguish them.
+- **Assessment prompt tuning.** Background Diagnostics is now explicitly tuned
+  as a conservative classifier: higher escalation threshold, more stable
+  finding categories, compact evidence, and lower-noise suggested prompts.
+
+## 0.11.7 — Better troubleshooting prompt guidance
+
+- **Direct chat prompt improvements.** The dashboard assistant now prefers
+  friendly/display names, calls out stale evidence, separates facts from
+  hypotheses, uses correct Thread topology semantics, and frames answers as
+  findings, impact, and next steps.
+- **Assessment prompt improvements.** Background Diagnostics now follows the
+  same naming, freshness, evidence-discipline, and remediation guidance when
+  generating findings and suggested starter prompts.
+
 ## 0.11.6 — Direct chat no longer depends on ai.enabled
 
 - **Fix direct chat routing.** Direct-model chat now activates from its own
