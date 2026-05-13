@@ -1,5 +1,5 @@
 name: Thread Observability
-version: 0.10.6
+version: 0.11.0
 slug: thread-observability
 description: Observe and troubleshoot Thread network health in Home Assistant.
 url: https://github.com/DarinShapiroMS/ThreadObservabilityPOC/tree/main/addons/thread-observability
@@ -36,6 +36,17 @@ options:
     ingestion_interval_seconds: 10
     topology_recompute_seconds: 30
     metadata_refresh_seconds: 900
+  assessment:
+    enabled: false
+    probation_interval_minutes: 15
+    probation_checks: 3
+    relaxing_initial_hours: 1
+    relaxing_max_hours: 24
+    heightened_initial_minutes: 30
+    heightened_max_hours: 6
+    engaged_interval_minutes: 5
+    engaged_decay_minutes: 60
+    daily_budget_calls: 12
 schema:
   log_level: list(trace|debug|info|warning|error|fatal)
   timezone: str
@@ -50,3 +61,14 @@ schema:
     ingestion_interval_seconds: int(5,60)
     topology_recompute_seconds: int(10,120)
     metadata_refresh_seconds: int(60,3600)
+  assessment:
+    enabled: bool
+    probation_interval_minutes: int(1,120)
+    probation_checks: int(1,10)
+    relaxing_initial_hours: int(1,24)
+    relaxing_max_hours: int(1,72)
+    heightened_initial_minutes: int(5,240)
+    heightened_max_hours: int(1,24)
+    engaged_interval_minutes: int(1,60)
+    engaged_decay_minutes: int(10,720)
+    daily_budget_calls: int(1,288)

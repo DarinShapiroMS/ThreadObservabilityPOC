@@ -609,6 +609,70 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "required": ["eui64_a", "eui64_b"],
         },
     },
+    # ---- Phase 4 Background Diagnostics tools -----------------------------
+    {
+        "name": "get_assessment_state",
+        "description": (
+            "Use when: you need to know whether Background Diagnostics is currently scheduled, when the next "
+            "assessment will run, and how much of today's call budget has been used. Returns the live scheduler "
+            "snapshot (state, next_assessment_at, budget). Read-only."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "list_assessment_findings",
+        "description": (
+            "Use when: surfacing or reviewing AI-flagged conditions on the Thread mesh. Returns finding rows "
+            "(headline, severity, confidence, evidence, suggested_starter_prompt, node_eui64) for the requested "
+            "state (default: open). Read-only."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "state": {
+                    "type": "string",
+                    "enum": ["open", "cleared", "dismissed", "all"],
+                    "default": "open",
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "mark_finding_outcome",
+        "description": (
+            "Use when: the user (or a downstream agent) wants to confirm whether an AI-surfaced finding was "
+            "actionable. Records an outcome (resolved / wrong / ignored_dismissed) for the finding and updates the "
+            "finding's state. Powers the precision metrics returned by ``get_assessment_quality``."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "finding_id": {"type": "string"},
+                "outcome": {
+                    "type": "string",
+                    "enum": ["resolved", "wrong", "ignored_dismissed"],
+                },
+                "notes": {"type": "string"},
+            },
+            "required": ["finding_id", "outcome"],
+        },
+    },
+    {
+        "name": "get_assessment_quality",
+        "description": (
+            "Use when: reviewing how the Background Diagnostics AI has been performing — precision estimate, "
+            "outcome breakdown, and any signal types whose false-positive rate looks high. Read-only."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "since": {"type": "string", "description": "ISO-8601; default 7d ago"},
+            },
+            "required": [],
+        },
+    },
 ]
 
 _TOOL_MAP = {t["name"]: t for t in TOOL_DEFS}
@@ -1156,6 +1220,40 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             )
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
+
+    if name == "get_assessment_state":
+        from ..services.assessment.scheduler import (
+            AssessmentScheduler,
+            ScheduleConfig,
+        )
+        cfg = ScheduleConfig.from_dict(
+            get_config().assessment.model_dump()
+        )
+        sched = AssessmentScheduler(config=cfg)
+        return sched.snapshot().as_dict()
+
+    if name == "list_assessment_findings":
+        state_arg = arguments.get("state") or "open"
+        state_filter: str | None = state_arg if state_arg != "all" else None
+        limit = int(arguments.get("limit") or 50)
+        rows = get_store().list_assessment_findings(state=state_filter, limit=limit)
+        return {"findings": rows, "count": len(rows)}
+
+    if name == "mark_finding_outcome":
+        from ..services.assessment import feedback as feedback_mod
+        try:
+            rec = feedback_mod.mark_outcome(
+                finding_id=str(arguments.get("finding_id") or ""),
+                outcome=str(arguments.get("outcome") or ""),
+                notes=arguments.get("notes"),
+            )
+            return {"recorded": True, "feedback": rec}
+        except (LookupError, ValueError) as exc:
+            return {"recorded": False, "error": str(exc)}
+
+    if name == "get_assessment_quality":
+        from ..services.assessment import feedback as feedback_mod
+        return feedback_mod.quality_summary(since=arguments.get("since"))
 
     raise ValueError(f"Unknown tool: {name}")
 

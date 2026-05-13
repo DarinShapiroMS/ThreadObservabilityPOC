@@ -482,6 +482,86 @@ _MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_node_counter_samples_ts
         ON node_counter_samples(observed_at DESC);
     """,
+    # v20 (0.11.0 / Phase 4 Background Diagnostics — #18):
+    # assessment_schedule — single-row state machine for the adaptive
+    # AI assessment scheduler. Persisted across addon updates so a
+    # network that has been "steady" for a week doesn't reset to
+    # probation cadence on every release. ``state`` ∈ {probation,
+    # relaxing, steady, heightened, engaged, disabled}. ``budget_*``
+    # tracks the daily LLM-call budget; ``daily_window_start_at`` is
+    # rolled over once per UTC day.
+    """
+    CREATE TABLE IF NOT EXISTS assessment_schedule (
+        id                      INTEGER PRIMARY KEY CHECK (id = 1),
+        state                   TEXT NOT NULL DEFAULT 'probation',
+        state_since             TEXT NOT NULL,
+        last_assessment_at      TEXT,
+        next_assessment_at      TEXT,
+        consecutive_ok          INTEGER NOT NULL DEFAULT 0,
+        consecutive_concern     INTEGER NOT NULL DEFAULT 0,
+        current_interval_seconds INTEGER NOT NULL,
+        budget_calls_used       INTEGER NOT NULL DEFAULT 0,
+        budget_window_start_at  TEXT NOT NULL,
+        reason                  TEXT,
+        updated_at              TEXT NOT NULL
+    );
+    """,
+    # v21 (0.11.0 / Phase 4 Background Diagnostics — #19):
+    # assessment_findings — verdict envelopes produced by the
+    # assessment engine. ``finding_key`` = sha1(eui64 || '|' || finding_type)
+    # is the dedup handle: a re-occurring concern bumps last_seen_at and
+    # confidence rather than creating a new row. ``state`` ∈
+    # {open, cleared, dismissed}. ``cleared_by`` ∈ {assessment,
+    # user_dismiss, user_resolve, user_wrong}. ``evidence_json`` holds
+    # the array of {tool, key_finding} pairs the agent cited;
+    # ``suggested_starter_prompt`` is the agent-authored chat opener.
+    """
+    CREATE TABLE IF NOT EXISTS assessment_findings (
+        finding_id              TEXT PRIMARY KEY,
+        finding_key             TEXT NOT NULL,
+        state                   TEXT NOT NULL DEFAULT 'open',
+        verdict                 TEXT NOT NULL,
+        severity                TEXT NOT NULL,
+        confidence              REAL NOT NULL,
+        finding_type            TEXT,
+        headline                TEXT NOT NULL,
+        evidence_json           TEXT NOT NULL,
+        suggested_starter_prompt TEXT,
+        node_eui64              TEXT,
+        created_at              TEXT NOT NULL,
+        last_seen_at            TEXT NOT NULL,
+        cleared_at              TEXT,
+        cleared_by              TEXT,
+        suppress_until          TEXT,
+        seen_count              INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX IF NOT EXISTS idx_findings_open
+        ON assessment_findings(state, last_seen_at);
+    CREATE INDEX IF NOT EXISTS idx_findings_key
+        ON assessment_findings(finding_key);
+    CREATE INDEX IF NOT EXISTS idx_findings_eui64
+        ON assessment_findings(node_eui64);
+    """,
+    # v22 (0.11.0 / Phase 4 Background Diagnostics — #22):
+    # assessment_feedback — outcomes for findings, captured via the
+    # ``mark_finding_outcome`` MCP tool or implicitly by the engine
+    # (auto-clear → ignored_expired) and the dismiss flow
+    # (→ ignored_dismissed). Powers precision metrics + the
+    # ``noisy_signal_types`` callout in get_assessment_quality.
+    """
+    CREATE TABLE IF NOT EXISTS assessment_feedback (
+        finding_id              TEXT PRIMARY KEY
+            REFERENCES assessment_findings(finding_id),
+        outcome                 TEXT NOT NULL,
+        outcome_at              TEXT NOT NULL,
+        finding_type            TEXT,
+        notes                   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_feedback_outcome_at
+        ON assessment_feedback(outcome_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_feedback_finding_type
+        ON assessment_feedback(finding_type);
+    """,
 ]
 
 
@@ -2329,6 +2409,313 @@ class SQLiteStore:
                     d["evidence"] = {"_raw": evj}
             out.append(d)
         return out
+
+    # -- assessment scheduler / findings / feedback (Phase 4) ----------
+
+    def get_assessment_schedule(self) -> dict[str, Any] | None:
+        """Return the current scheduler row, or ``None`` before first init."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM assessment_schedule WHERE id = 1"
+            ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_assessment_schedule(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """Insert or update the single scheduler row.
+
+        ``fields`` is merged into the existing row (if any). ``updated_at``
+        is always set to now. Returns the resulting row.
+        """
+        now = _utc_now()
+        merged = {
+            "state": "probation",
+            "state_since": now,
+            "last_assessment_at": None,
+            "next_assessment_at": None,
+            "consecutive_ok": 0,
+            "consecutive_concern": 0,
+            "current_interval_seconds": 900,
+            "budget_calls_used": 0,
+            "budget_window_start_at": now,
+            "reason": None,
+        }
+        existing = self.get_assessment_schedule() or {}
+        merged.update({k: v for k, v in existing.items() if k != "updated_at"})
+        merged.update(fields)
+        merged["updated_at"] = now
+        with self._tx() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO assessment_schedule (
+                    id, state, state_since, last_assessment_at, next_assessment_at,
+                    consecutive_ok, consecutive_concern, current_interval_seconds,
+                    budget_calls_used, budget_window_start_at, reason, updated_at
+                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    merged["state"],
+                    merged["state_since"],
+                    merged.get("last_assessment_at"),
+                    merged.get("next_assessment_at"),
+                    int(merged.get("consecutive_ok") or 0),
+                    int(merged.get("consecutive_concern") or 0),
+                    int(merged.get("current_interval_seconds") or 900),
+                    int(merged.get("budget_calls_used") or 0),
+                    merged["budget_window_start_at"],
+                    merged.get("reason"),
+                    merged["updated_at"],
+                ),
+            )
+        out = self.get_assessment_schedule()
+        assert out is not None
+        return out
+
+    def upsert_assessment_finding(
+        self,
+        *,
+        finding_id: str,
+        finding_key: str,
+        verdict: str,
+        severity: str,
+        confidence: float,
+        headline: str,
+        evidence: list[dict[str, Any]] | None = None,
+        suggested_starter_prompt: str | None = None,
+        node_eui64: str | None = None,
+        finding_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Insert a new finding or bump an existing open row with the same key.
+
+        Dedup rule: if a row with ``finding_key`` exists and is ``state='open'``,
+        bump ``last_seen_at`` + ``seen_count`` and take the max confidence.
+        Otherwise insert a new row.
+        """
+        now = _utc_now()
+        ev_json = json.dumps(evidence or [])
+        with self._tx() as conn:
+            existing = conn.execute(
+                "SELECT * FROM assessment_findings"
+                " WHERE finding_key = ? AND state = 'open'"
+                " ORDER BY created_at DESC LIMIT 1",
+                (finding_key,),
+            ).fetchone()
+            if existing:
+                new_conf = max(float(existing["confidence"] or 0.0), confidence)
+                conn.execute(
+                    "UPDATE assessment_findings"
+                    "   SET last_seen_at = ?,"
+                    "       seen_count = seen_count + 1,"
+                    "       confidence = ?,"
+                    "       severity = ?,"
+                    "       headline = ?,"
+                    "       evidence_json = ?,"
+                    "       suggested_starter_prompt = COALESCE(?, suggested_starter_prompt)"
+                    " WHERE finding_id = ?",
+                    (
+                        now,
+                        new_conf,
+                        severity,
+                        headline,
+                        ev_json,
+                        suggested_starter_prompt,
+                        existing["finding_id"],
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT * FROM assessment_findings WHERE finding_id = ?",
+                    (existing["finding_id"],),
+                ).fetchone()
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO assessment_findings (
+                        finding_id, finding_key, state, verdict, severity,
+                        confidence, finding_type, headline, evidence_json,
+                        suggested_starter_prompt, node_eui64,
+                        created_at, last_seen_at, seen_count
+                    ) VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                    """,
+                    (
+                        finding_id,
+                        finding_key,
+                        verdict,
+                        severity,
+                        confidence,
+                        finding_type,
+                        headline,
+                        ev_json,
+                        suggested_starter_prompt,
+                        node_eui64,
+                        now,
+                        now,
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT * FROM assessment_findings WHERE finding_id = ?",
+                    (finding_id,),
+                ).fetchone()
+        return _row_to_finding(row)
+
+    def list_assessment_findings(
+        self,
+        *,
+        state: str | None = "open",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List findings filtered by ``state`` (default: only open)."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if state:
+            clauses.append("state = ?")
+            params.append(state)
+        sql = "SELECT * FROM assessment_findings"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY last_seen_at DESC LIMIT ?"
+        params.append(int(limit))
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [_row_to_finding(r) for r in rows]
+
+    def get_assessment_finding(self, finding_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM assessment_findings WHERE finding_id = ?",
+                (finding_id,),
+            ).fetchone()
+        return _row_to_finding(row) if row else None
+
+    def clear_assessment_findings_by_key(
+        self,
+        finding_key: str,
+        *,
+        cleared_by: str = "assessment",
+    ) -> int:
+        """Mark all open rows with this key as cleared. Returns count affected."""
+        now = _utc_now()
+        with self._tx() as conn:
+            cur = conn.execute(
+                "UPDATE assessment_findings"
+                "   SET state = 'cleared', cleared_at = ?, cleared_by = ?"
+                " WHERE finding_key = ? AND state = 'open'",
+                (now, cleared_by, finding_key),
+            )
+            return cur.rowcount or 0
+
+    def dismiss_assessment_finding(
+        self,
+        finding_id: str,
+        *,
+        suppress_seconds: int = 86400,
+    ) -> dict[str, Any] | None:
+        """User dismissed; suppress same finding_key for the window."""
+        now_dt = datetime.now(tz=UTC)
+        suppress_until = (now_dt + timedelta(seconds=suppress_seconds)).isoformat()
+        with self._tx() as conn:
+            conn.execute(
+                "UPDATE assessment_findings"
+                "   SET state = 'dismissed', cleared_at = ?, cleared_by = 'user_dismiss',"
+                "       suppress_until = ?"
+                " WHERE finding_id = ?",
+                (now_dt.isoformat(), suppress_until, finding_id),
+            )
+        return self.get_assessment_finding(finding_id)
+
+    def is_finding_key_suppressed(self, finding_key: str, *, at: str | None = None) -> bool:
+        """Return True if any dismissed row with the same key has suppress_until > now."""
+        ts = at or _utc_now()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM assessment_findings"
+                " WHERE finding_key = ? AND state = 'dismissed'"
+                "   AND suppress_until IS NOT NULL AND suppress_until > ?"
+                " LIMIT 1",
+                (finding_key, ts),
+            ).fetchone()
+        return row is not None
+
+    def record_assessment_feedback(
+        self,
+        *,
+        finding_id: str,
+        outcome: str,
+        finding_type: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        now = _utc_now()
+        with self._tx() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO assessment_feedback (
+                    finding_id, outcome, outcome_at, finding_type, notes
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (finding_id, outcome, now, finding_type, notes),
+            )
+        return {
+            "finding_id": finding_id,
+            "outcome": outcome,
+            "outcome_at": now,
+            "finding_type": finding_type,
+            "notes": notes,
+        }
+
+    def assessment_feedback_summary(self, *, since: str | None = None) -> dict[str, Any]:
+        """Aggregate feedback outcomes since ``since`` (ISO-8601, default 7 days)."""
+        if not since:
+            since = (datetime.now(tz=UTC) - timedelta(days=7)).isoformat()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT outcome, finding_type FROM assessment_feedback"
+                " WHERE outcome_at >= ?",
+                (since,),
+            ).fetchall()
+        by_outcome: dict[str, int] = {}
+        per_type: dict[str, dict[str, int]] = {}
+        for r in rows:
+            by_outcome[r["outcome"]] = by_outcome.get(r["outcome"], 0) + 1
+            ftype = r["finding_type"] or "unknown"
+            per_type.setdefault(ftype, {"total": 0, "wrong": 0, "resolved": 0})
+            per_type[ftype]["total"] += 1
+            if r["outcome"] == "wrong":
+                per_type[ftype]["wrong"] += 1
+            elif r["outcome"] == "resolved":
+                per_type[ftype]["resolved"] += 1
+        total = len(rows)
+        good = by_outcome.get("resolved", 0) + by_outcome.get("ignored_expired", 0)
+        precision = (good / total) if total else None
+        noisy: list[dict[str, Any]] = []
+        for ftype, stats in per_type.items():
+            if stats["total"] >= 3 and stats["wrong"] / stats["total"] > 0.25:
+                noisy.append(
+                    {
+                        "finding_type": ftype,
+                        "wrong_rate": round(stats["wrong"] / stats["total"], 3),
+                        "n": stats["total"],
+                    }
+                )
+        return {
+            "since": since,
+            "total_findings": total,
+            "by_outcome": by_outcome,
+            "precision_estimate": precision,
+            "noisy_signal_types": noisy,
+        }
+
+
+def _row_to_finding(row: sqlite3.Row | None) -> dict[str, Any]:
+    if row is None:
+        return {}
+    d = dict(row)
+    evj = d.pop("evidence_json", None)
+    if evj:
+        try:
+            d["evidence"] = json.loads(evj)
+        except Exception:  # noqa: BLE001
+            d["evidence"] = {"_raw": evj}
+    else:
+        d["evidence"] = []
+    return d
 
 
 def _row_to_event(row: sqlite3.Row) -> dict[str, Any]:

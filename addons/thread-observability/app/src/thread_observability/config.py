@@ -30,6 +30,26 @@ class AIConfig(BaseModel):
     provider: str = Field(default="local")
 
 
+class AssessmentConfig(BaseModel):
+    """Background Diagnostics (Phase 4, #18-#22) cadence + budget knobs.
+
+    Defaults match documentation/07-agentic-ai-sprint.md §11.1. ``enabled``
+    is set at install time via the addon options radio; the runtime switch
+    entity flips it without touching options.
+    """
+
+    enabled: bool = False
+    probation_interval_minutes: int = Field(default=15, ge=1, le=120)
+    probation_checks: int = Field(default=3, ge=1, le=10)
+    relaxing_initial_hours: int = Field(default=1, ge=1, le=24)
+    relaxing_max_hours: int = Field(default=24, ge=1, le=72)
+    heightened_initial_minutes: int = Field(default=30, ge=5, le=240)
+    heightened_max_hours: int = Field(default=6, ge=1, le=24)
+    engaged_interval_minutes: int = Field(default=5, ge=1, le=60)
+    engaged_decay_minutes: int = Field(default=60, ge=10, le=720)
+    daily_budget_calls: int = Field(default=12, ge=1, le=288)
+
+
 class SchedulerConfig(BaseModel):
     ingestion_interval_seconds: int = Field(default=10, ge=5, le=60)
     topology_recompute_seconds: int = Field(default=30, ge=10, le=120)
@@ -71,6 +91,7 @@ class ThreadObsConfig(BaseModel):
     ai: AIConfig = Field(default_factory=AIConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     influx: InfluxConfig = Field(default_factory=InfluxConfig)
+    assessment: AssessmentConfig = Field(default_factory=AssessmentConfig)
     options_path: str = str(OPTIONS_PATH)
     options_loaded: bool = False
 

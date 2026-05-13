@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.11.0 — Phase 4: Background Diagnostics (Adaptive Monitoring)
+
+- **New: adaptive background assessment loop** (#18, #19, #22). The
+  add-on now runs cadence-driven self-checks that ride the existing
+  triage/reasoner pipeline and, when a verdict agent is wired up, ask
+  for a structured JSON envelope (verdict / severity / confidence /
+  headline / evidence / starter prompt).
+- **Adaptive scheduler state machine** (`services/assessment/scheduler.py`):
+  `probation → relaxing → steady → heightened → engaged → disabled`.
+  Cadence stretches exponentially on healthy verdicts (capped) and
+  drops back to a tight interval on `investigate`. Daily call budget
+  with UTC-midnight rollover protects against runaway LLM cost.
+- **Verdict envelope engine** (`services/assessment/engine.py`):
+  strict parser (rejects bad verdicts, requires ≥2 evidence for
+  `investigate`, caps headline length, strips markdown fences),
+  stable per-(node, finding_type) `finding_key` for dedup, one retry
+  on parse failure then degrades to a synthetic `parse_failure` ok
+  verdict so the loop never crashes the add-on.
+- **Findings persistence + feedback** (`services/assessment/feedback.py`,
+  schema v20/v21/v22): `assessment_schedule` (single-row state machine,
+  survives restarts), `assessment_findings` (dedup + suppress_until +
+  seen_count), `assessment_feedback` (user outcomes drive a rolling
+  precision estimate and a noisy-signal-type list).
+- **4 new MCP tools**: `get_assessment_state`,
+  `list_assessment_findings`, `mark_finding_outcome`,
+  `get_assessment_quality`.
+- **Config**: new `assessment:` block in `config.yaml` /
+  `ThreadObsConfig.assessment` controls cadence bands and daily
+  budget. Defaults: probation 15 min × 3, relaxing 1 h → 24 h,
+  heightened 30 min → 6 h, engaged 5 min with 60 min decay,
+  12 calls/day budget.
+- **Tests**: 36 new unit tests across schema, scheduler, engine,
+  feedback. Full suite green (286 passed / 1 skipped).
+
 ## 0.10.6 — Fix dashboard render regression
 
 - **Hotfix for 0.10.5.** The dashboard JS still referenced the four
