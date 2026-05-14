@@ -27,6 +27,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from ..utils.datetime import utc_now_iso
+
 DEFAULT_DB_PATH = Path(
     os.getenv("THREAD_OBS_DB_PATH", "/data/thread-observability/state.db")
 )
@@ -643,7 +645,7 @@ _MIGRATIONS: list[str] = [
 
 
 def _utc_now() -> str:
-    return datetime.now(tz=UTC).isoformat()
+    return utc_now_iso()
 
 
 class SQLiteStore:

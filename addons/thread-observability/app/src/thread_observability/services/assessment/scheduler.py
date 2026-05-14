@@ -35,6 +35,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from ...storage.sqlite_store import SQLiteStore, get_store
+from ...utils.datetime import parse_iso_datetime, to_iso_utc, utc_now
 
 
 SchedulerState = Literal[
@@ -124,20 +125,15 @@ class SchedulerDecision:
 
 
 def _utc_now() -> datetime:
-    return datetime.now(tz=UTC)
+    return utc_now()
 
 
 def _iso(dt: datetime) -> str:
-    return dt.isoformat()
+    return to_iso_utc(dt)
 
 
 def _parse(ts: str | None) -> datetime | None:
-    if not ts:
-        return None
-    try:
-        return datetime.fromisoformat(ts)
-    except ValueError:
-        return None
+    return parse_iso_datetime(ts)
 
 
 class AssessmentScheduler:

@@ -23,6 +23,7 @@ from ..health import build_health_snapshot as _build_health_snapshot
 from ..pipeline import nodes as nodes_mod
 from ..pipeline import otbr_adapter
 from ..pipeline import topology as topology_mod
+from ..utils.datetime import utc_now_iso
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
 
@@ -70,7 +71,7 @@ ADDON_VERSION = _read_addon_version()
 
 
 def _utc_now() -> str:
-    return datetime.now(tz=UTC).isoformat()
+    return utc_now_iso()
 
 
 def _tail_log(n: int = LOG_TAIL_LINES) -> list[str]:

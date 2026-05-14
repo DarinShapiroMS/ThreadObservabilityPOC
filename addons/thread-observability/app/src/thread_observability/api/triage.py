@@ -20,11 +20,12 @@ from typing import Any
 from ..health import build_health_snapshot
 from ..pipeline.runner import get_runner_state
 from ..storage.sqlite_store import get_store
+from ..utils.datetime import utc_now_iso
 from . import supervisor_client
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(tz=UTC).isoformat()
+    return utc_now_iso()
 
 
 # ---------------------------------------------------------------------------

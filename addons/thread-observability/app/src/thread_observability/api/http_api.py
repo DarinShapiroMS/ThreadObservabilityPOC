@@ -33,6 +33,7 @@ from ..pipeline import routing as routing_mod
 from ..pipeline import runner as pipeline_runner
 from ..pipeline import topology as topology_mod
 from ..pipeline import topology_snapshot as topology_snapshot_mod
+from ..utils.datetime import utc_now_iso
 from ..services import chat_memory
 from ..services import direct_chat
 from ..storage import influx_store as ts_store
@@ -447,7 +448,7 @@ _HA_INTEGRATIONS_URL = "/config/integrations/dashboard"
 
 
 def _utc_now() -> str:
-    return datetime.now(tz=UTC).isoformat()
+    return utc_now_iso()
 
 
 def _tail_log(n: int = 80) -> list[str]:
