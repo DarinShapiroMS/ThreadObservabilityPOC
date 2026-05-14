@@ -369,8 +369,13 @@ def _answer_requests_user_node_selection(candidate_text: str) -> bool:
             "i would need to know which node",
             "need to know which node",
             "selected eui64",
+            "selected node eui64",
             "selected node",
             "none of them have a selected eui64",
+            "select one of the nodes",
+            "please select a node",
+            "select a node from the dashboard",
+            "provide the eui64 of the node you are interested in",
         )
     )
 
@@ -774,11 +779,17 @@ def _internal_tool_answer_needs_refusal(message: str, candidate_text: str, tool_
             "which node you would like to investigate",
             "selected node",
             "selected eui64",
+            "selected node eui64",
             "none of them have a selected eui64",
+            "select one of the nodes",
+            "please select a node",
+            "select a node from the dashboard",
             "i need to know which node",
             "i would need to know which node",
             "i do not have any information about which node",
             "i don't have any information about which node",
+            "i do not have any information about the node",
+            "i don't have any information about the node",
         )
     )
 

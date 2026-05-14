@@ -44,7 +44,7 @@ async function runThreadObservabilityChatSmoke(config = {}) {
         "can't determine whether rf conditions caused the channel change",
         "can't determine whether rf conditions caused the channel change from the available evidence",
       ],
-      forbid_contains: ['configuration history', 'reset history', 'call the get_', 'internal mcp', 'get_node_history', "please provide the node's eui64"],
+      forbid_contains: ['configuration history', 'reset history', 'call the get_', 'internal mcp', 'get_node_history', "please provide the node's eui64", 'please provide the eui64 of the node', 'select one of the nodes'],
       require_tool_names: ['get_mesh_state'],
     },
     {
@@ -61,6 +61,9 @@ async function runThreadObservabilityChatSmoke(config = {}) {
         'internal mcp tool',
         'please provide the eui64',
         'which node you would like to investigate',
+        'please select a node',
+        'select a node from the dashboard',
+        'selected node eui64',
       ],
       require_tool_names: ['list_all_nodes'],
     },

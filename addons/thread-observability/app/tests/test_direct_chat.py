@@ -1333,9 +1333,10 @@ def test_direct_chat_turn_refuses_internal_tool_request_when_counter_call_uses_n
                         "message": {
                             "role": "assistant",
                             "content": (
-                                "Based on the current mesh state, I can see that there are 19 nodes in the mesh, but I do not "
-                                "have any information about the selected node, as its EUI64 is still null. Therefore, the "
-                                "currently available evidence is insufficient to determine whether RF caused the channel change."
+                                "Based on the current evidence, the selected node EUI64 is still null. This means that I do "
+                                "not have any information about the node that is experiencing the issue. Therefore, I do not "
+                                "have enough evidence to determine whether RF caused the channel change. To proceed, please "
+                                "select a node from the dashboard."
                             ),
                         }
                     }
@@ -1507,9 +1508,10 @@ def test_direct_chat_turn_falls_back_when_rf_answer_invents_get_node_history_and
                     "message": {
                         "role": "assistant",
                         "content": (
-                            "Unfortunately, the available evidence is still insufficient to determine if RF conditions caused "
-                            "the channel change. We would need to call the get_node_history function and know the node's EUI64. "
-                            "Please provide the node's EUI64 so I can continue with the analysis."
+                            "Unfortunately, the available evidence is insufficient to determine if RF conditions caused the "
+                            "channel change. We don't have information about the node's EUI64, which is required to retrieve "
+                            "its counter series. To gather more evidence, please provide the EUI64 of the node you are interested "
+                            "in, or select one of the nodes from the current mesh inventory."
                         ),
                     }
                 }

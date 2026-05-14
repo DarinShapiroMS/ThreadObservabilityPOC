@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.25 — Clamp remaining live node-selection drift in RF and refusal paths
+
+- **Internal-tool refusal tightening.** Direct chat now treats live answer shapes like `selected node EUI64 is still null` and `please select a node from the dashboard` as refusal-path drift and clamps them to the deterministic internal-tool refusal instead of surfacing node-selection guidance.
+- **RF grounding tightening.** RF/channel-cause answers now also clamp when the model asks the user to provide/select a node or EUI64 after counter grounding already failed, rather than letting that request escape as the final answer.
+- **Live smoke alignment.** Updated the live smoke matrix and browser-authenticated smoke helper to fail on the exact node-selection phrasings seen in live `0.11.24` evaluation.
+
 ## 0.11.24 — Browser-authenticated smoke and stronger RF fallback clamping
 
 - **Browser-authenticated live smoke.** Added a reusable browser-side smoke helper for HA ingress sessions where terminal requests return `401 Unauthorized`, so live chat validation can reuse the same matrix and telemetry scoring inside an authenticated dashboard session.
