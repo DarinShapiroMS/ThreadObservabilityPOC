@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.11.37 — Dashboard grounding and cleanup pass
+
+This release packages the validated backlog work completed after the 0.11.36
+live-validation fixes.
+
+**Highlights:**
+- adds graph hover metadata for nodes and links so topology inspection no
+  longer depends entirely on click selection
+- canonicalizes partition-state snapshots onto the deduplicated node view so
+  recommissioned alias rows do not inflate partition counts
+- improves router rows in the Network tab by deriving RSSI/LQI from
+  reporter-owned link data when needed and rendering parent-change deltas as
+  not applicable for router-class nodes
+- tightens direct-chat grounding so it no longer leaks internal MCP tool names
+  back to operators and stays aligned with visible dashboard evidence
+- continues the internal cleanup pass by extracting shared datetime/coercion
+  helpers and relocating legacy add-on reference exports into `samples/`
+
 ## 0.11.36 — Live validation follow-up fixes
 
 This release addresses the remaining defects found during the live 0.11.35

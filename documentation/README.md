@@ -1,6 +1,6 @@
 # Thread Observability Platform - Design Documentation
 
-> **Status (2026-05): the add-on is on version 0.11.36, schema v19, with 41 MCP tools.** The documents in this folder capture the original V1 design intent. They are *not* an authoritative API reference - several tool names and field shapes evolved during Phases 1-4 (envelope, catalog reshape, triage entry points, counter time-series).
+> **Status (2026-05): the add-on is on version 0.11.37, schema v19, with 41 MCP tools.** The documents in this folder capture the original V1 design intent. They are *not* an authoritative API reference - several tool names and field shapes evolved during Phases 1-4 (envelope, catalog reshape, triage entry points, counter time-series).
 >
 > For the current, runtime-accurate tool surface see [06-mcp-tools-reference.md](06-mcp-tools-reference.md). For per-release detail see [`addons/thread-observability/CHANGELOG.md`](../addons/thread-observability/CHANGELOG.md).
 
