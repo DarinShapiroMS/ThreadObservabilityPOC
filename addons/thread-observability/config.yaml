@@ -1,5 +1,5 @@
 name: Thread Observability
-version: 0.11.29
+version: 0.11.30
 slug: thread-observability
 description: Observe and troubleshoot Thread network health in Home Assistant.
 url: https://github.com/DarinShapiroMS/ThreadObservabilityPOC/tree/main/addons/thread-observability
@@ -29,9 +29,20 @@ options:
   retention:
     full_resolution_days: 3
     sampled_archive_days: 14
+    chat_days: 14
   ai:
     enabled: false
     provider: local
+    chat_backend: ha
+    model: ""
+    base_url: ""
+    api_key: ""
+    temperature: 0.2
+  chat:
+    enabled: false
+    default_agent_id: ""
+    send_page_context: true
+    persist_transcripts: false
   scheduler:
     ingestion_interval_seconds: 10
     topology_recompute_seconds: 30
@@ -43,9 +54,20 @@ schema:
   retention:
     full_resolution_days: int(1,30)
     sampled_archive_days: int(1,60)
+    chat_days: int(1,90)
   ai:
     enabled: bool
-    provider: list(local|openai|anthropic)
+    provider: list(local|openai|anthropic|cerebras)
+    chat_backend: list(ha|auto|direct)
+    model: str?
+    base_url: str?
+    api_key: password?
+    temperature: float(0,2)
+  chat:
+    enabled: bool
+    default_agent_id: str?
+    send_page_context: bool
+    persist_transcripts: bool
   scheduler:
     ingestion_interval_seconds: int(5,60)
     topology_recompute_seconds: int(10,120)

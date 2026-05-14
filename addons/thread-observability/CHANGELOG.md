@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.30 — Add-on schema hotfix
+
+This patch fixes Home Assistant add-on option validation for direct-chat
+and chat settings.
+
+**Fixes:**
+- `config.yaml` now accepts the runtime AI provider and chat fields already
+  supported by the Python config model, including `cerebras`,
+  `chat_backend`, `model`, `base_url`, `api_key`, `temperature`, chat
+  settings, and `retention.chat_days`.
+- This unblocks upgrades for installs that already have direct-chat
+  options saved in Home Assistant.
+
 ## 0.11.29 — MCP transport, chat setup, and grounded diagnostics
 
 This release bundles the recent MCP, chat, and diagnostics work into one
