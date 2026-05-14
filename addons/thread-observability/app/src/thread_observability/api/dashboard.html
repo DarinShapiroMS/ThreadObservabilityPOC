@@ -91,7 +91,15 @@
   .legend { display:flex; gap:14px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-top: 8px; }
   .legend .sw { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align: middle; }
 
+  #graph-stage { position: relative; }
   #cy { height: 640px; background: var(--panel2); border:1px solid var(--border); border-radius: 10px; }
+  .graph-hover-card {
+    position:absolute; z-index:30; left:0; top:0; display:none; pointer-events:none;
+    max-width:320px; padding:10px 12px; border-radius:10px; border:1px solid var(--border);
+    background: rgba(11,18,32,0.96); box-shadow: 0 12px 28px rgba(0,0,0,0.35);
+  }
+  .graph-hover-card.visible { display:block; }
+  .graph-hover-card .rail-sub { margin-top: 6px; }
 
   pre.log { background:#0b1220; border:1px solid var(--border); border-radius: 8px; padding: 10px; max-height: 320px; overflow:auto; font-size: 12px; color: #cbd5e1; }
   details { background: var(--panel); border:1px solid var(--border); border-radius:8px; padding: 8px 12px; margin-bottom: 10px; }
@@ -539,7 +547,10 @@
       <div id="graph-risk-strip" class="warnings-row" style="margin-bottom:10px;">
         <span class="warn-chip info">Graph diagnostics are computed server-side when available.</span>
       </div>
-      <div id="cy"></div>
+      <div id="graph-stage">
+        <div id="cy"></div>
+        <div id="graph-hover-card" class="graph-hover-card" aria-hidden="true"></div>
+      </div>
       <div class="grid" style="margin-top:14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
         <div class="card" id="graph-area-recommendations">
           <h2>Area Recommendations</h2>
@@ -2333,6 +2344,76 @@ function renderGraphInspector() {
     + '</dl>';
 }
 
+function graphHoverHtmlForNode(node) {
+  const rows = [
+    ['Area', graphAreaName(node)],
+    ['Partition', node.partition_id != null ? partitionShortId(node.partition_id) : null],
+    ['Role', node.routing_role || node.device_kind],
+    ['Status', node.status],
+    ['Parent', node.parent_name || node.parent_eui64],
+    ['Next hop', (node.next_hop_to_otbr && (node.next_hop_to_otbr.name || node.next_hop_to_otbr.eui64)) || null],
+    ['Serial', node.serial_number],
+  ].filter((row) => row[1]);
+  return '<div class="item-title">' + escapeHtml(nodeDisplayName(node)) + '</div>'
+    + '<div class="rail-sub">'
+    + [node.status, node.routing_role || node.device_kind, node.partition_id != null ? ('partition ' + partitionShortId(node.partition_id)) : null]
+      .filter(Boolean).map(escapeHtml).join(' · ')
+    + '</div>'
+    + '<dl class="identity-grid" style="margin-top:10px;">'
+    + rows.map((row) => '<dt>' + escapeHtml(row[0]) + '</dt><dd>' + escapeHtml(row[1]) + '</dd>').join('')
+    + '</dl>';
+}
+
+function graphHoverHtmlForEdge(edge) {
+  const source = graphNodeMeta(edge.data('source')) || { eui64: edge.data('source') };
+  const target = graphNodeMeta(edge.data('target')) || { eui64: edge.data('target') };
+  const rows = [
+    ['Type', edge.data('edge_class') || 'other'],
+    ['Signal', edge.data('label') || '—'],
+    ['Tags', edge.data('tags') || 'none'],
+  ];
+  return '<div class="item-title">' + escapeHtml(nodeDisplayName(source)) + ' → ' + escapeHtml(nodeDisplayName(target)) + '</div>'
+    + '<div class="rail-sub">Hover metadata for this link</div>'
+    + '<dl class="identity-grid" style="margin-top:10px;">'
+    + rows.map((row) => '<dt>' + escapeHtml(row[0]) + '</dt><dd>' + escapeHtml(row[1]) + '</dd>').join('')
+    + '</dl>';
+}
+
+function hideGraphHover() {
+  const host = $('#graph-hover-card');
+  if (!host) return;
+  host.classList.remove('visible');
+  host.setAttribute('aria-hidden', 'true');
+}
+
+function showGraphHover(evt) {
+  const host = $('#graph-hover-card');
+  const stage = $('#graph-stage');
+  if (!host || !stage || !evt || !evt.target || evt.target === cy) return;
+  const html = evt.target.isNode()
+    ? graphHoverHtmlForNode(graphNodeMeta(evt.target.id()) || {})
+    : graphHoverHtmlForEdge(evt.target);
+  host.innerHTML = html;
+  host.classList.add('visible');
+  host.setAttribute('aria-hidden', 'false');
+  positionGraphHover(evt);
+}
+
+function positionGraphHover(evt) {
+  const host = $('#graph-hover-card');
+  const stage = $('#graph-stage');
+  if (!host || !stage || !host.classList.contains('visible') || !evt) return;
+  const stageRect = stage.getBoundingClientRect();
+  const rendered = evt.renderedPosition || { x: stageRect.width / 2, y: stageRect.height / 2 };
+  let left = rendered.x + 14;
+  let top = rendered.y + 14;
+  const hostRect = host.getBoundingClientRect();
+  if (left + hostRect.width > stageRect.width - 8) left = Math.max(8, rendered.x - hostRect.width - 14);
+  if (top + hostRect.height > stageRect.height - 8) top = Math.max(8, rendered.y - hostRect.height - 14);
+  host.style.left = left + 'px';
+  host.style.top = top + 'px';
+}
+
 function applyGraphPresentation() {
   if (!cy) return;
   cy.elements().removeClass('focus-muted recent-change weak-focus unstable-focus duplicate-focus selected-focus');
@@ -2512,8 +2593,18 @@ async function renderGraph(options = {}) {
     if (evt.target === cy) {
       graphSelection = null;
       clearPathHighlight();
+      hideGraphHover();
       applyGraphPresentation();
     }
+  });
+  cy.on('mouseover', 'node, edge', (evt) => {
+    showGraphHover(evt);
+  });
+  cy.on('mousemove', 'node, edge', (evt) => {
+    positionGraphHover(evt);
+  });
+  cy.on('mouseout', 'node, edge', () => {
+    hideGraphHover();
   });
 
   applyGraphPresentation();
