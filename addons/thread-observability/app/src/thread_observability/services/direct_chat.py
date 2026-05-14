@@ -403,6 +403,23 @@ def _looks_like_counter_or_rf_question(text: str) -> bool:
     )
 
 
+def _looks_like_internal_tool_request(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "what internal mcp tool should i call",
+            "which internal mcp tool should i call",
+            "what tool should i call",
+            "which tool should i call",
+            "what function should i call",
+            "which function should i call",
+        )
+    )
+
+
 def _has_sufficient_node_evidence(tool_trace: list[dict[str, Any]]) -> bool:
     names = {str(row.get("name") or "") for row in tool_trace}
     if "analyze_node" not in names:
@@ -703,6 +720,13 @@ def _build_counter_insufficient_response(tool_trace: list[dict[str, Any]]) -> st
         + " and ".join(reasons)
         + "."
     )
+
+
+def _build_internal_tool_refusal_response(message: str, tool_trace: list[dict[str, Any]]) -> str:
+    prefix = "I can't ask you to call internal MCP tools directly. "
+    if _looks_like_counter_or_rf_question(message):
+        return prefix + _build_counter_insufficient_response(tool_trace)
+    return prefix + "The available evidence is insufficient to answer that from the current turn."
 
 
 def _validate_chat_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
@@ -1119,6 +1143,7 @@ async def direct_chat_turn(
     node_question = _looks_like_node_question(message)
     history_comparison_question = _looks_like_history_comparison_question(message)
     counter_question = _looks_like_counter_or_rf_question(message)
+    internal_tool_request = _looks_like_internal_tool_request(message)
 
     for _ in range(_MAX_TOOL_ROUNDS + 1):
         body = {
@@ -1196,6 +1221,12 @@ async def direct_chat_turn(
                 continue
             if history_comparison_question and _history_answer_overclaims_channel_change(message, candidate_text, tool_trace):
                 final_text = _build_history_insufficient_response(tool_trace)
+                break
+            if internal_tool_request and (
+                _looks_like_tool_deferral(candidate_text)
+                or _counter_answer_mentions_unsupported_evidence(candidate_text)
+            ):
+                final_text = _build_internal_tool_refusal_response(message, tool_trace)
                 break
             if counter_question and _counter_answer_is_unreliable(candidate_text, tool_trace):
                 final_text = _build_counter_insufficient_response(tool_trace)

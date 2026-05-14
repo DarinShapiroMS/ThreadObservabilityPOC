@@ -1394,3 +1394,117 @@ def test_direct_chat_turn_falls_back_when_counter_answer_relies_on_unsupported_c
     assert result["tool_calls"][0]["name"] == "get_counter_series"
     assert result["tool_calls"][1]["name"] == "list_all_nodes"
     assert len(calls) == 3
+
+
+def test_direct_chat_turn_refuses_internal_tool_request_without_unsupported_config_history(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-counters-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_counter_series",
+                                        "arguments": '{"eui64":"selected_node_eui64","counter_names":["tx_retry","tx_err_cca"]}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 2:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-counters-2",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_counter_series",
+                                        "arguments": '{"eui64":"selected_node_eui64","counter_names":["tx_retry","tx_err_cca"]}',
+                                    },
+                                },
+                                {
+                                    "id": "call-inventory",
+                                    "type": "function",
+                                    "function": {"name": "list_all_nodes", "arguments": "{}"},
+                                },
+                            ],
+                        }
+                    }
+                ]
+            }
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "Unfortunately, the available evidence is insufficient to determine which node's channel "
+                            "change was caused by RF. The current mesh inventory only shows the status and EUI64 of each "
+                            "node, but does not provide any information about channel changes or RF events. To proceed with "
+                            "the investigation, I would need to gather more evidence, such as counter series or config history."
+                        ),
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        if name == "list_all_nodes":
+            return {
+                "data": {
+                    "count": 1,
+                    "nodes": [
+                        {
+                            "eui64": "e6684b9903e8970f",
+                            "friendly_name": "Family Room Track Lights",
+                            "status": "online",
+                            "partition_id": 1846206278,
+                        }
+                    ],
+                },
+                "meta": {"tool": name},
+            }
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="What internal MCP tool should I call to verify whether RF caused the channel change?",
+            rendered_message="User message: What internal MCP tool should I call to verify whether RF caused the channel change?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == (
+        "I can't ask you to call internal MCP tools directly. I can't determine whether RF conditions caused the channel "
+        "change from the available evidence because the counter query was not grounded to a real 16-hex EUI64 from the mesh "
+        "inventory and the returned counter series was empty."
+    )
+    assert [row["name"] for row in result["tool_calls"][:2]] == ["get_counter_series", "get_counter_series"]
+    assert result["tool_calls"][-1]["name"] == "list_all_nodes"

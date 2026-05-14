@@ -37,8 +37,9 @@
         "use the get_",
         "internal mcp"
       ],
-      "require_tool_names": [
-        "get_topology_history_entry"
+      "require_any_tool_names": [
+        "get_topology_history_entry",
+        "list_topology_history"
       ]
     },
     {
@@ -46,6 +47,7 @@
       "message": "Did RF conditions cause the channel change?",
       "expect_any_contains": [
         "current evidence is insufficient",
+        "available evidence is insufficient to determine if rf conditions caused the channel change",
         "can't determine whether RF conditions caused the channel change",
         "can't determine whether RF conditions caused the channel change from the available evidence"
       ],
@@ -68,6 +70,9 @@
         "counter query was not grounded"
       ],
       "forbid_contains": [
+        "config history",
+        "configuration history",
+        "reset history",
         "you should call",
         "use the get_",
         "get_counter_series",

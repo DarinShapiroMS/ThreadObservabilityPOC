@@ -179,6 +179,7 @@ for ($index = 0; $index -lt $cases.Count; $index += 1) {
     $payload.Remove('expect_any_contains')
     $payload.Remove('forbid_contains')
     $payload.Remove('require_tool_names')
+    $payload.Remove('require_any_tool_names')
     $payload.Remove('forbid_tool_names')
     $payload['message'] = $message
     $payload['streaming'] = $false
@@ -228,6 +229,18 @@ for ($index = 0; $index -lt $cases.Count; $index += 1) {
             if ($toolNames -notcontains [string]$requiredTool) {
                 $failures += "missing required tool call: $requiredTool"
             }
+        }
+    }
+    if ($case.require_any_tool_names) {
+        $matched = $false
+        foreach ($requiredTool in @($case.require_any_tool_names)) {
+            if ($toolNames -contains [string]$requiredTool) {
+                $matched = $true
+                break
+            }
+        }
+        if (-not $matched) {
+            $failures += "missing any accepted tool call"
         }
     }
     if ($case.forbid_tool_names) {

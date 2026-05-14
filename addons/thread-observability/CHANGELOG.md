@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.23 — Internal-tool refusal grounding and smoke matrix refinement
+
+- **Internal-tool refusal guard.** Direct chat now converts internal-tool-request prompts into a deterministic refusal when the answer still drifts into unsupported evidence like config/reset history, instead of leaking those suggestions back to the user.
+- **Live-shaped regression coverage.** Added focused direct-chat coverage for the internal-tool refusal path observed in live `v0.11.22` validation.
+- **Smoke matrix refinement.** Relaxed the live smoke matrix to accept multiple valid grounded history paths and broader insufficient-evidence wording, while explicitly failing if the refusal path suggests unsupported config/reset-history evidence.
+
 ## 0.11.22 — Chat smoke harness, broader regressions, and shared dashboard chat
 
 - **Reusable live smoke checks.** Added a PowerShell chat smoke harness plus a reusable prompt matrix for history-grounding, RF-cause grounding, and internal-tool refusal checks against the live `/v1/chat/turn` endpoint.
