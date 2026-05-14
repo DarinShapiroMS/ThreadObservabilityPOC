@@ -114,6 +114,8 @@
   .warnings-row .warn-chip.bad  { background:#3b0a0a; color:#fca5a5; border-color:#7f1d1d; }
   .warnings-row .warn-chip.warn { background:#3b2706; color:#fde68a; border-color:#854d0e; }
   .warnings-row .warn-chip.info { background:#0c2748; color:#93c5fd; border-color:#1d4ed8; }
+  .warnings-row button.warn-chip { cursor:pointer; }
+  .warnings-row button.warn-chip:hover { opacity: 0.92; }
 
   .assessment-banner {
     margin-top: 14px; padding: 14px; border-radius: 10px; border:1px solid #7f1d1d;
@@ -123,6 +125,8 @@
   .assessment-banner-head { display:flex; align-items:flex-start; gap:10px; }
   .assessment-banner-title { font-size: 15px; font-weight: 700; line-height: 1.4; }
   .assessment-banner-meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .assessment-banner-copy { color: var(--fg); font-size: 13px; line-height: 1.5; margin-top: 10px; }
+  .assessment-banner-facts { margin-top: 10px; }
   .assessment-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top: 12px; }
   .action-btn {
     background: var(--panel2); color: var(--fg); border:1px solid var(--border);
@@ -392,9 +396,12 @@
               </div>
               <span id="assessment-banner-count" class="pill warn" style="display:none;"></span>
             </div>
+            <div id="assessment-banner-copy" class="assessment-banner-copy"></div>
+            <div id="assessment-banner-facts" class="warnings-row assessment-banner-facts"></div>
             <div id="assessment-actions" class="assessment-actions">
               <button id="assessment-investigate-btn" class="action-btn primary">Investigate with me</button>
               <button id="assessment-evidence-btn" class="action-btn">Show me what you saw</button>
+              <button id="assessment-banner-refresh-btn" class="action-btn">Run fresh check</button>
               <button id="assessment-hide-btn" class="action-btn warn">Not now</button>
               <button id="assessment-dismiss-btn" class="action-btn bad">Dismiss for 24h</button>
             </div>
@@ -990,12 +997,33 @@ function renderAssessmentBanner() {
     return;
   }
   banner.classList.remove('hidden');
+  const severity = String(finding.severity || finding.verdict || 'finding');
+  const severityRank = assessmentSeverityRank(severity);
+  const bannerCopy = $('#assessment-banner-copy');
+  const facts = $('#assessment-banner-facts');
   $('#assessment-banner-title').textContent = finding.headline || 'Background Diagnostics found something to investigate.';
   $('#assessment-banner-meta').textContent = [
     (finding.display_name || finding.node_eui64) ? ('node ' + (finding.display_name || finding.node_eui64)) : null,
     finding.finding_type || null,
     finding.confidence != null ? ('confidence ' + Math.round(Number(finding.confidence) * 100) + '%') : null,
   ].filter(Boolean).join(' · ');
+  if (bannerCopy) {
+    bannerCopy.textContent = severityRank <= 1
+      ? 'Adaptive Monitoring is flagging this as worth operator attention now. Review the evidence, ask chat to explain it, or run a fresh check to confirm it is still happening.'
+      : 'Adaptive Monitoring noticed this in the background. Review the evidence now, or run a fresh check before you decide whether to dismiss it.';
+  }
+  if (facts) {
+    const factItems = [
+      { text: severity, cls: severityRank <= 1 ? 'bad' : 'warn' },
+      finding.last_seen_at ? { text: 'seen ' + fmtAge(finding.last_seen_at), cls: 'info' } : null,
+      finding.finding_type ? { text: finding.finding_type, cls: 'info' } : null,
+      (finding.display_name || finding.node_eui64) ? { text: 'focus ' + (finding.display_name || finding.node_eui64), cls: 'warn' } : null,
+    ].filter(Boolean);
+    facts.innerHTML = '';
+    factItems.forEach(item => {
+      facts.appendChild(el('span', { class: 'warn-chip ' + item.cls }, item.text));
+    });
+  }
   const more = Math.max(0, (lastAssessmentFindings || []).length - 1);
   const count = $('#assessment-banner-count');
   count.style.display = more > 0 ? 'inline-block' : 'none';
@@ -1123,6 +1151,21 @@ async function dismissAssessmentFinding(findingId) {
   } catch (e) {
     alert('Unable to dismiss finding: ' + e.message);
   }
+}
+
+async function runAssessmentNow() {
+  const result = await postJSON('v1/assessment/run-now', {});
+  if (!result || result.ok === false) {
+    if (result && result.decision && result.decision.budget_exhausted) {
+      throw new Error('Adaptive Monitoring budget exhausted. Try again after the next budget reset.');
+    }
+    throw new Error((result && result.error) || 'assessment did not run');
+  }
+  if (result.result && result.result.finding_id) {
+    activeAssessmentFindingId = result.result.finding_id;
+    assessmentBannerHiddenId = null;
+  }
+  await refreshAssessmentData({ preserveHistory: true });
 }
 
 async function refreshAssessmentData(opts = {}) {
@@ -1337,6 +1380,19 @@ function renderHeadline(s) {
 
   const warnings = $('#headline-warnings');
   warnings.innerHTML = '';
+  const topFinding = topAssessmentFinding();
+  if (topFinding) {
+    const findingChip = el('button', {
+      class: 'warn-chip ' + (assessmentSeverityRank(topFinding.severity || topFinding.verdict) <= 1 ? 'bad' : 'warn'),
+      type: 'button',
+      title: 'Background Diagnostics surfaced a finding worth reviewing. Click to jump to the evidence rail.',
+    }, 'Adaptive Monitoring: ' + (topFinding.headline || 'review recommended'));
+    findingChip.addEventListener('click', () => {
+      showAssessmentFinding(topFinding);
+      $('#assessment-banner').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    warnings.appendChild(findingChip);
+  }
   if (distinctNets > 1) {
     warnings.appendChild(el('span', {
       class: 'warn-chip bad',
@@ -2887,13 +2943,16 @@ $('#assessment-dismiss-btn').addEventListener('click', async () => {
   if (!finding || !finding.finding_id) return;
   await dismissAssessmentFinding(finding.finding_id);
 });
+$('#assessment-banner-refresh-btn').addEventListener('click', async () => {
+  try {
+    await runAssessmentNow();
+  } catch (e) {
+    alert('Unable to run assessment: ' + e.message);
+  }
+});
 $('#assessment-run-now-btn').addEventListener('click', async () => {
   try {
-    const result = await postJSON('v1/assessment/run-now', {});
-    if (result && result.result && result.result.finding_id) {
-      activeAssessmentFindingId = result.result.finding_id;
-    }
-    await refreshAssessmentData({ preserveHistory: true });
+    await runAssessmentNow();
   } catch (e) {
     alert('Unable to run assessment: ' + e.message);
   }
