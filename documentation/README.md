@@ -46,11 +46,13 @@
 
 7. **[Sprint Design: Agentic AI Integration](07-agentic-ai-sprint.md)**
 
-8. **[Live AI Evaluation](08-live-ai-eval.md)** *(release-time live acceptance harness for the dashboard chat assistant)*
+8. **[Work Buckets](08-work-buckets.md)** *(current backlog grouped into rational delivery buckets)*
 
-9. **[Backlog Roadmap](09-backlog-roadmap.md)** *(current dependency-ordered execution plan for the remaining GitHub backlog)*
+9. **[Live AI Evaluation](08-live-ai-eval.md)** *(release-time live acceptance harness for the dashboard chat assistant)*
 
-10. **[HA MCP Client Setup](10-ha-mcp-client-setup.md)** *(operator walkthrough for connecting Home Assistant Assist agents to Thread Observability MCP tools)*
+10. **[Backlog Roadmap](09-backlog-roadmap.md)** *(current dependency-ordered execution plan for the remaining GitHub backlog)*
+
+11. **[HA MCP Client Setup](10-ha-mcp-client-setup.md)** *(operator walkthrough for connecting Home Assistant Assist agents to Thread Observability MCP tools)*
 
 ---
 
