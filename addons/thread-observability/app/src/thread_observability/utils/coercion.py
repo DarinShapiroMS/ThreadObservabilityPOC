@@ -27,3 +27,17 @@ def to_tristate_int(value: Any) -> int | None:
     if value is None:
         return None
     return 1 if bool(value) else 0
+
+
+def first_present_field(struct: Any, *keys: str, int_key: int | None = None) -> Any:
+    if not isinstance(struct, dict):
+        return None
+    if int_key is not None:
+        value = struct.get(str(int_key))
+        if value is not None:
+            return value
+    for key in keys:
+        value = struct.get(key)
+        if value is not None:
+            return value
+    return None

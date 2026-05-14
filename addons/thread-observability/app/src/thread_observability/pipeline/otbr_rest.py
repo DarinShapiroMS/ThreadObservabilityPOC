@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 
 from ..storage.sqlite_store import SQLiteStore, get_store
-from ..utils.coercion import coerce_int, to_tristate_int
+from ..utils.coercion import coerce_int, first_present_field, to_tristate_int
 
 log = logging.getLogger(__name__)
 
@@ -332,11 +332,7 @@ async def fetch_otbr_diagnostics(
 
 def _otbr_field(entry: dict[str, Any], *keys: str) -> Any:
     """Return the first non-None value among ``keys`` (case variants)."""
-    for k in keys:
-        v = entry.get(k)
-        if v is not None:
-            return v
-    return None
+    return first_present_field(entry, *keys)
 
 
 def _otbr_eui_from(entry: dict[str, Any]) -> str | None:

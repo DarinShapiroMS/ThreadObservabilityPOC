@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ..storage.sqlite_store import SQLiteStore, get_store
-from ..utils.coercion import coerce_int, to_tristate_int
+from ..utils.coercion import coerce_int, first_present_field, to_tristate_int
 
 log = logging.getLogger(__name__)
 
@@ -241,16 +241,7 @@ def _ext_address_to_eui64(raw: Any) -> str | None:
 
 def _field(struct: dict[str, Any], int_key: int, *str_keys: str) -> Any:
     """Defensively read a struct field by Matter integer id or named alias."""
-    if not isinstance(struct, dict):
-        return None
-    val = struct.get(str(int_key))
-    if val is not None:
-        return val
-    for k in str_keys:
-        v = struct.get(k)
-        if v is not None:
-            return v
-    return None
+    return first_present_field(struct, *str_keys, int_key=int_key)
 
 
 def _coerce_int(v: Any) -> int | None:
