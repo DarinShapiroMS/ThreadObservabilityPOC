@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from ..utils.datetime import parse_iso_datetime
+
 _EUI = r"[0-9a-fA-F]{16}"
 
 # Leading timestamp variants we accept. All are anchored to start-of-line.
@@ -136,9 +138,9 @@ def _extract_ts(line: str) -> tuple[str, str]:
                     pass
             if normalised.endswith("Z"):
                 normalised = normalised[:-1] + "+00:00"
-            dt = datetime.fromisoformat(normalised)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=UTC)
+            dt = parse_iso_datetime(normalised)
+            if dt is None:
+                raise ValueError("invalid timestamp")
             return dt.astimezone(UTC).isoformat(), line[m.end():]
         except ValueError:
             return _now_iso(), line[m.end():]

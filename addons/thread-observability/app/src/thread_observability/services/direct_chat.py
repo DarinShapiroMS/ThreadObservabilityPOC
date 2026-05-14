@@ -19,6 +19,7 @@ from typing import Any
 import httpx
 
 from ..config import AIConfig
+from ..utils.datetime import parse_iso_datetime
 from . import web_search
 
 _DIRECT_AGENT_PREFIX = "direct:"
@@ -591,15 +592,7 @@ def _parse_iso8601(value: Any) -> datetime | None:
     text = str(value or "").strip()
     if not text:
         return None
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+    return parse_iso_datetime(text)
 
 
 def _extract_snapshot_summaries(result: Any) -> list[dict[str, Any]]:
