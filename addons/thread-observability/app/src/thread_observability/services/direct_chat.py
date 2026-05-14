@@ -63,6 +63,7 @@ _CHAT_TOOL_EXCLUDE: frozenset[str] = frozenset(
 _WEB_SEARCH_TOOL_NAME = "web_search"
 _NODE_EUI64_RE = re.compile(r"\b([0-9a-f]{16})\b", re.IGNORECASE)
 _POTENTIAL_NODE_ID_RE = re.compile(r"\b([0-9a-f]{12,16})\b", re.IGNORECASE)
+_STRICT_EUI64_RE = re.compile(r"^[0-9a-f]{16}$", re.IGNORECASE)
 _NODE_HISTORY_WINDOW = timedelta(hours=2)
 
 
@@ -426,6 +427,73 @@ def _tool_result_data(result: Any) -> Any:
     return result
 
 
+def _is_valid_eui64(value: Any) -> bool:
+    return bool(_STRICT_EUI64_RE.fullmatch(str(value or "").strip()))
+
+
+def _result_contains_channel_evidence(value: Any, *, _depth: int = 0) -> bool:
+    if _depth > 5:
+        return False
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            if str(key).strip().lower() == "channel" and inner not in (None, ""):
+                return True
+            if _result_contains_channel_evidence(inner, _depth=_depth + 1):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_result_contains_channel_evidence(inner, _depth=_depth + 1) for inner in value)
+    return False
+
+
+def _tool_trace_contains_channel_evidence(tool_trace: list[dict[str, Any]]) -> bool:
+    return any(_result_contains_channel_evidence(_tool_result_data(row.get("result"))) for row in tool_trace)
+
+
+def _history_answer_overclaims_channel_change(message: str, candidate_text: str, tool_trace: list[dict[str, Any]]) -> bool:
+    normalized_message = " ".join(str(message or "").lower().split())
+    normalized_answer = " ".join(str(candidate_text or "").lower().split())
+    if "channel" not in normalized_message:
+        return False
+    channel_claim_markers = (
+        "channel has changed",
+        "channel changed",
+        "current channel is different",
+        "channel did not change",
+        "channel has not changed",
+        "same channel",
+    )
+    if not any(marker in normalized_answer for marker in channel_claim_markers):
+        return False
+    return not _tool_trace_contains_channel_evidence(tool_trace)
+
+
+def _build_history_insufficient_response(tool_trace: list[dict[str, Any]]) -> str:
+    diff_row = next((row for row in reversed(tool_trace) if str(row.get("name") or "") == "diff_topology_history"), None)
+    if diff_row is None:
+        return (
+            "I don't have channel-specific history for the retained comparison anchors, so I can't determine whether "
+            "the Thread channel changed in that window."
+        )
+    diff = _tool_result_data(diff_row.get("result"))
+    diff = diff if isinstance(diff, dict) else {}
+    summary = diff.get("summary") if isinstance(diff.get("summary"), dict) else {}
+    added_nodes = int(summary.get("added_node_count") or len(diff.get("added_nodes") or []))
+    removed_nodes = int(summary.get("removed_node_count") or len(diff.get("removed_nodes") or []))
+    changed_nodes = int(summary.get("changed_node_count") or len(diff.get("changed_nodes") or []))
+    if added_nodes or removed_nodes or changed_nodes:
+        return (
+            "I can see retained topology changes between the comparison snapshots "
+            f"({added_nodes} added nodes, {removed_nodes} removed nodes, {changed_nodes} changed nodes), "
+            "but I don't have channel-specific history for those anchors, so I can't determine whether the Thread "
+            "channel changed."
+        )
+    return (
+        "I can compare the retained topology snapshots, but they do not include channel-specific history, so I can't "
+        "determine whether the Thread channel changed."
+    )
+
+
 def _parse_iso8601(value: Any) -> datetime | None:
     text = str(value or "").strip()
     if not text:
@@ -561,6 +629,22 @@ def _response_references_unknown_node(text: str, tool_trace: list[dict[str, Any]
     return any(ref not in known for ref in refs)
 
 
+def _counter_tool_arguments_are_invalid(tool_trace: list[dict[str, Any]]) -> bool:
+    for row in tool_trace:
+        name = str(row.get("name") or "")
+        arguments = row.get("arguments") if isinstance(row.get("arguments"), dict) else {}
+        if name in {"get_counter_series", "analyze_node"}:
+            eui64 = arguments.get("eui64")
+            if eui64 and not _is_valid_eui64(eui64):
+                return True
+        if name == "compare_node_counters":
+            for key in ("eui64_a", "eui64_b"):
+                eui64 = arguments.get(key)
+                if eui64 and not _is_valid_eui64(eui64):
+                    return True
+    return False
+
+
 def _counter_evidence_is_empty(tool_trace: list[dict[str, Any]]) -> bool:
     saw_counter_tool = False
     for row in tool_trace:
@@ -577,6 +661,60 @@ def _counter_evidence_is_empty(tool_trace: list[dict[str, Any]]) -> bool:
             if not (a_series.get("series") or b_series.get("series")):
                 return True
     return saw_counter_tool and False
+
+
+def _counter_answer_mentions_unsupported_evidence(candidate_text: str) -> bool:
+    normalized = " ".join(str(candidate_text or "").lower().split())
+    if not normalized:
+        return False
+    return any(
+        phrase in normalized
+        for phrase in (
+            "configuration history",
+            "config history",
+            "reset history",
+            "node's configuration",
+            "nodes configuration",
+            "node that changed channels",
+            '"channel_change" counter',
+        )
+    )
+
+
+def _counter_answer_is_unreliable(candidate_text: str, tool_trace: list[dict[str, Any]]) -> bool:
+    return (
+        _counter_tool_arguments_are_invalid(tool_trace)
+        or _counter_evidence_is_empty(tool_trace)
+        or _response_references_unknown_node(candidate_text, tool_trace)
+        or _counter_answer_mentions_unsupported_evidence(candidate_text)
+    )
+
+
+def _build_counter_insufficient_response(tool_trace: list[dict[str, Any]]) -> str:
+    reasons: list[str] = []
+    if _counter_tool_arguments_are_invalid(tool_trace):
+        reasons.append("the counter query was not grounded to a real 16-hex EUI64 from the mesh inventory")
+    if _counter_evidence_is_empty(tool_trace):
+        reasons.append("the returned counter series was empty")
+    if not reasons:
+        reasons.append("the available counter evidence is insufficient")
+    return (
+        "I can't determine whether RF conditions caused the channel change from the available evidence because "
+        + " and ".join(reasons)
+        + "."
+    )
+
+
+def _validate_chat_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
+    if name in {"get_counter_series", "analyze_node"}:
+        eui64 = arguments.get("eui64")
+        if eui64 and not _is_valid_eui64(eui64):
+            return {"error": "invalid eui64 argument: expected 16 hex characters"}
+    if name == "compare_node_counters":
+        invalid_keys = [key for key in ("eui64_a", "eui64_b") if arguments.get(key) and not _is_valid_eui64(arguments.get(key))]
+        if invalid_keys:
+            return {"error": f"invalid eui64 argument(s): {', '.join(invalid_keys)} must be 16 hex characters"}
+    return None
 
 
 def _force_answer_retry_message() -> str:
@@ -1027,7 +1165,9 @@ async def direct_chat_turn(
                             "This question compares current state with an older retained topology snapshot. Use the "
                             "authoritative backend evidence below before answering. Do not invent snapshot timestamps, "
                             "and do not treat the same snapshot as both the current and historical anchor. If there is "
-                            "no distinct older snapshot, say the retained history is insufficient for that comparison.\n\n"
+                            "no distinct older snapshot, say the retained history is insufficient for that comparison. "
+                            "If the question asks about channel changes, do not claim a channel change unless the gathered "
+                            "evidence includes channel-specific data. A topology diff alone does not prove a channel change.\n\n"
                             + _serialize_for_prompt(evidence, max_chars=_MAX_EVIDENCE_MESSAGE_CHARS)
                         ),
                     }
@@ -1036,7 +1176,7 @@ async def direct_chat_turn(
             if (
                 counter_question
                 and counter_grounding_retries < _MAX_COUNTER_GROUNDING_RETRIES
-                and (_counter_evidence_is_empty(tool_trace) or _response_references_unknown_node(candidate_text, tool_trace))
+                and _counter_answer_is_unreliable(candidate_text, tool_trace)
             ):
                 counter_grounding_retries += 1
                 evidence = await _gather_backend_counter_grounding_evidence(tool_trace)
@@ -1045,13 +1185,21 @@ async def direct_chat_turn(
                         "role": "system",
                         "content": (
                             "Counter-based answers must stay grounded in real nodes from the current mesh inventory. Do not "
-                            "invent node IDs, and do not infer RF or channel-root-cause conclusions from empty counter series. "
+                            "invent node IDs, do not use placeholder EUI64 values, and do not infer RF or channel-root-cause "
+                            "conclusions from empty counter series. Do not recommend config-history or reset-history evidence "
+                            "unless that evidence was actually gathered in this turn. "
                             "Use only the current mesh inventory below, or answer that the evidence is insufficient.\n\n"
                             + _serialize_for_prompt(evidence, max_chars=_MAX_EVIDENCE_MESSAGE_CHARS)
                         ),
                     }
                 )
                 continue
+            if history_comparison_question and _history_answer_overclaims_channel_change(message, candidate_text, tool_trace):
+                final_text = _build_history_insufficient_response(tool_trace)
+                break
+            if counter_question and _counter_answer_is_unreliable(candidate_text, tool_trace):
+                final_text = _build_counter_insufficient_response(tool_trace)
+                break
             if node_question and node_evidence_retries < _MAX_NODE_EVIDENCE_RETRIES and not _has_sufficient_node_evidence(tool_trace):
                 node_evidence_retries += 1
                 evidence = await _gather_backend_node_evidence(message, tool_trace)
@@ -1080,7 +1228,9 @@ async def direct_chat_turn(
             if tool_calls_used > _MAX_TOOL_CALLS:
                 result = {"error": f"tool call limit exceeded ({_MAX_TOOL_CALLS})"}
             else:
-                result = await _dispatch_chat_tool(tool_call["name"], tool_call["arguments"])
+                result = _validate_chat_tool_arguments(tool_call["name"], tool_call["arguments"])
+                if result is None:
+                    result = await _dispatch_chat_tool(tool_call["name"], tool_call["arguments"])
             tool_trace.append(
                 {
                     "id": tool_call["id"],

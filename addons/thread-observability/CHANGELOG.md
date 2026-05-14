@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.21 — Tighter channel and counter grounding for direct chat
+
+- **No channel claims from topology-only diffs.** Direct chat now treats retained topology diffs as topology evidence only and will not turn them into channel-change claims unless channel-specific history is actually present in the gathered evidence.
+- **Strict node-ID validation for counter tools.** Chat tool calls that target node counters now reject placeholder or malformed EUI64 values before dispatch, so the model cannot reason from fake node identifiers like `your_node_eui64`.
+- **Deterministic insufficient-evidence fallback.** When the model still drifts after the retry path, direct chat now returns a grounded insufficient-evidence answer instead of speculating about unsupported causes, config history, or reset history.
+- **Regression coverage.** Added focused tests for topology-diff/channel drift, placeholder counter-node rejection, and the updated deterministic fallback wording.
+
 ## 0.11.20 — Grounded history comparisons and chat telemetry
 
 - **History comparison guardrails.** Direct chat now validates retained-snapshot comparisons server-side, refuses to compare a snapshot to itself across time anchors, and reports insufficient retained history instead of inventing timestamps or overclaiming no change.
