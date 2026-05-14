@@ -78,6 +78,53 @@ def test_read_tool_error_response_still_wrapped(monkeypatch: pytest.MonkeyPatch)
     assert out["meta"]["tool"] == "get_health_snapshot"
 
 
+def test_list_all_nodes_status_filter_uses_documented_freshness_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> dict[str, Any]:
+        return await mcp_tools._dispatch_tool("list_all_nodes", {"status_filter": "healthy"})
+
+    monkeypatch.setattr(
+        mcp_tools.nodes_mod,
+        "list_nodes_enriched",
+        lambda include_signal_strength=True, include_phantoms=False: [
+            {"eui64": "healthy-online", "status": "online", "last_seen": "2026-05-14T06:12:00+00:00"},
+            {"eui64": "healthy-unregistered", "status": "unregistered", "last_seen": "2026-05-14T06:12:00+00:00"},
+            {"eui64": "old-offline", "status": "offline", "last_seen": "2026-05-14T03:00:00+00:00"},
+        ],
+    )
+
+    monkeypatch.setattr(
+        mcp_tools.nodes_mod,
+        "infer_node_status",
+        lambda node, stale_minutes=60: "healthy" if node["eui64"].startswith("healthy") else "offline",
+    )
+
+    out = asyncio.run(run())
+
+    assert out["count"] == 2
+    assert [row["eui64"] for row in out["nodes"]] == ["healthy-online", "healthy-unregistered"]
+
+
+def test_list_all_nodes_phantom_filter_uses_stored_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> dict[str, Any]:
+        return await mcp_tools._dispatch_tool("list_all_nodes", {"status_filter": "phantom"})
+
+    monkeypatch.setattr(
+        mcp_tools.nodes_mod,
+        "list_nodes_enriched",
+        lambda include_signal_strength=True, include_phantoms=False: [
+            {"eui64": "phantom-node", "status": "phantom", "last_seen": "2026-05-14T06:12:00+00:00"},
+            {"eui64": "online-node", "status": "online", "last_seen": "2026-05-14T06:12:00+00:00"},
+        ],
+    )
+
+    out = asyncio.run(run())
+
+    assert out["count"] == 1
+    assert out["nodes"][0]["eui64"] == "phantom-node"
+
+
 def test_all_documented_read_tools_in_registry() -> None:
     """Every name in _READ_TOOLS must exist in TOOL_DEFS."""
     registered = {t["name"] for t in mcp_tools.TOOL_DEFS}

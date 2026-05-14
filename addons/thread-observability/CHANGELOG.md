@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.11.32 — Chat tool status-filter fix
+
+This patch fixes a live MCP inconsistency discovered during dashboard chat
+validation.
+
+**Fixes:**
+- makes `list_all_nodes(status_filter=...)` honor the documented
+  `healthy`/`stale`/`offline` freshness semantics instead of comparing those
+  filters against raw availability labels like `online` and `unregistered`
+- preserves `phantom` filtering against the stored phantom node status
+- adds focused regression coverage for healthy and phantom filtering
+
 ## 0.11.31 — Dashboard/chat recovery
 
 This patch restores the dashboard shell expected by the current HTTP tests

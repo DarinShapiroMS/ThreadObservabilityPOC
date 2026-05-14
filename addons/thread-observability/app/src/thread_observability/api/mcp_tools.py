@@ -1247,7 +1247,13 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 include_phantoms=include_phantoms,
             )
             if status_filter:
-                nodes = [n for n in nodes if n.get("status") == status_filter]
+                if status_filter == "phantom":
+                    nodes = [n for n in nodes if n.get("status") == "phantom"]
+                else:
+                    nodes = [
+                        n for n in nodes
+                        if nodes_mod.infer_node_status(n) == status_filter
+                    ]
             return {"nodes": nodes, "count": len(nodes)}
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc), "nodes": []}
