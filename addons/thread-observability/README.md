@@ -50,5 +50,5 @@ Returns environment + health + active issues + up to 3 `recommended_next` tool c
 
 ## Repository notes
 
-- `nodes.json` and `nodes_output.json` are legacy reference exports retained for offline inspection of node-shaping output. They are not runtime inputs for the add-on.
+- Legacy node-shaping reference exports now live under `../../samples/addon/`. They are retained for offline inspection only and are not runtime inputs for the add-on.
 - The ad hoc OTBR parser smoke helper lives at `../../scripts/test_real_logs.py` rather than the repository root.

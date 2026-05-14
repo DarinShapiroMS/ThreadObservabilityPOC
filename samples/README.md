@@ -5,6 +5,7 @@ Useful for offline schema inspection and parser test fixtures.
 
 Sources captured (one folder each):
 
+- `addon/` — legacy Thread Observability add-on reference exports retained for offline inspection of node-shaping output
 - `chat/` — reusable live-chat smoke matrices for add-on acceptance runs
 	Includes `live_browser_smoke.js`, a browser-authenticated smoke helper for HA ingress sessions where terminal requests return `401 Unauthorized`.
 - `mcp/` — Thread Observability MCP tool responses (`http://192.168.68.90:8100/mcp`)
