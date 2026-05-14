@@ -154,31 +154,38 @@ def get_latest_signal_strength(node_eui64: str, store: SQLiteStore | None = None
     """
     s = store or get_store()
 
-    # ---- prefer link-table data (Matter cluster 53) ----
-    with s._lock:  # noqa: SLF001
-        rows = s._conn.execute(  # noqa: SLF001
-            "SELECT reporter_eui64, rssi_avg, rssi_last, lqi_in, lqi_out,"
-            "       is_child, source"
-            "  FROM links WHERE neighbor_eui64 = ?",
-            (node_eui64,),
-        ).fetchall()
-    rows = [dict(r) for r in rows]
-    rssi_vals = [int(r["rssi_avg"]) for r in rows if r.get("rssi_avg") is not None]
-    lqi_vals = [int(r["lqi_in"]) for r in rows if r.get("lqi_in") is not None]
-    if rssi_vals or lqi_vals:
+    def _rows_for(column: str) -> list[dict[str, Any]]:
+        with s._lock:  # noqa: SLF001
+            fetched = s._conn.execute(  # noqa: SLF001
+                f"SELECT reporter_eui64, neighbor_eui64, rssi_avg, rssi_last, lqi_in, lqi_out,"
+                f"       is_child, source FROM links WHERE {column} = ?",
+                (node_eui64,),
+            ).fetchall()
+        return [dict(r) for r in fetched]
+
+    def _strength_from_rows(rows: list[dict[str, Any]], *, mode: str) -> dict[str, Any] | None:
+        if mode == "incoming":
+            rssi_vals = [int(r["rssi_avg"]) for r in rows if r.get("rssi_avg") is not None]
+            lqi_vals = [int(r["lqi_in"]) for r in rows if r.get("lqi_in") is not None]
+        else:
+            rssi_vals = [int(r["rssi_avg"]) for r in rows if r.get("rssi_avg") is not None]
+            lqi_vals = [int(r["lqi_out"]) for r in rows if r.get("lqi_out") is not None]
+        if not (rssi_vals or lqi_vals):
+            return None
+
         # Build a per-reporter rollup so we can name the strongest neighbor.
-        # When the same reporter appears in both neighbor_table and
-        # route_table we keep the strongest RSSI seen.
-        per_reporter: dict[str, dict[str, Any]] = {}
+        # When the same peer appears in both neighbor_table and route_table
+        # we keep the strongest RSSI seen.
+        per_peer: dict[str, dict[str, Any]] = {}
         for r in rows:
-            rep = r.get("reporter_eui64")
-            if not rep:
+            peer_eui = r.get("reporter_eui64") if mode == "incoming" else r.get("neighbor_eui64")
+            if not peer_eui:
                 continue
-            slot = per_reporter.setdefault(rep, {
-                "eui64": rep, "rssi": None, "lqi": None, "is_child": False,
+            slot = per_peer.setdefault(peer_eui, {
+                "eui64": peer_eui, "rssi": None, "lqi": None, "is_child": False,
             })
             rssi = r.get("rssi_avg")
-            lqi = r.get("lqi_in")
+            lqi = r.get("lqi_in") if mode == "incoming" else r.get("lqi_out")
             if rssi is not None and (slot["rssi"] is None or rssi > slot["rssi"]):
                 slot["rssi"] = int(rssi)
             if lqi is not None and (slot["lqi"] is None or lqi > slot["lqi"]):
@@ -186,27 +193,27 @@ def get_latest_signal_strength(node_eui64: str, store: SQLiteStore | None = None
             if r.get("is_child"):
                 slot["is_child"] = True
         # Resolve names (one query, batched).
-        if per_reporter:
-            placeholders = ",".join("?" for _ in per_reporter)
+        if per_peer:
+            placeholders = ",".join("?" for _ in per_peer)
             with s._lock:  # noqa: SLF001
                 name_rows = s._conn.execute(  # noqa: SLF001
                     "SELECT eui64, friendly_name FROM nodes"
                     f" WHERE eui64 IN ({placeholders})",
-                    list(per_reporter.keys()),
+                    list(per_peer.keys()),
                 ).fetchall()
             for nr in name_rows:
                 d = dict(nr)
                 eui = d.get("eui64")
-                if eui in per_reporter:
-                    per_reporter[eui]["name"] = d.get("friendly_name")
+                if eui in per_peer:
+                    per_peer[eui]["name"] = d.get("friendly_name")
         neighbors = sorted(
-            per_reporter.values(),
+            per_peer.values(),
             key=lambda x: (x["rssi"] is None, -(x["rssi"] or -999)),
         )
         best = neighbors[0] if neighbors and neighbors[0]["rssi"] is not None else None
-        best_reporter = None
+        best_peer = None
         if best:
-            best_reporter = {
+            best_peer = {
                 "eui64": best["eui64"],
                 "name": best.get("name"),
                 "rssi": best["rssi"],
@@ -218,15 +225,24 @@ def get_latest_signal_strength(node_eui64: str, store: SQLiteStore | None = None
             "lqi": (max(lqi_vals) if lqi_vals else None),
             "rssi_avg": (sum(rssi_vals) // len(rssi_vals)) if rssi_vals else None,
             "lqi_avg": (sum(lqi_vals) // len(lqi_vals)) if lqi_vals else None,
-            "best_reporter": best_reporter,
+            "best_reporter": best_peer,
             "neighbors": neighbors,
-            "source": "links",
+            "source": "links" if mode == "incoming" else "reported_links",
         }
+
+    # ---- prefer link-table data (Matter cluster-53) ----
+    incoming = _strength_from_rows(_rows_for("neighbor_eui64"), mode="incoming")
+    if incoming:
+        return incoming
+
+    reported = _strength_from_rows(_rows_for("reporter_eui64"), mode="outgoing")
+    if reported:
+        return reported
 
     # ---- fallback: event log ----
     events = s.query_events(eui64=node_eui64, limit=100)
-    rssi_samples = [e.get("rssi") for e in events if e.get("rssi") is not None]
-    lqi_samples = [e.get("lqi") for e in events if e.get("lqi") is not None]
+    rssi_samples = [int(e["rssi"]) for e in events if e.get("rssi") is not None]
+    lqi_samples = [int(e["lqi"]) for e in events if e.get("lqi") is not None]
     return {
         "rssi": rssi_samples[0] if rssi_samples else None,
         "lqi": lqi_samples[0] if lqi_samples else None,

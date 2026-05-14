@@ -1370,6 +1370,10 @@ function fmtDelta(v) {
   return String(v);
 }
 
+function fmtDeltaNotApplicable() {
+  return '<span class="muted" title="Not applicable for router-class nodes. Parent changes are an end-device stability signal.">n/a</span>';
+}
+
 function deltaClass(v, warnAt, badAt) {
   if (v === undefined || v === null) return '';
   if (v >= badAt) return 'delta-bad';
@@ -1869,11 +1873,13 @@ function renderNodesTable(nodes) {
       if (best) {
         const repName = best.name || (best.eui64 || '').slice(-4).toUpperCase();
         const tag = best.is_child ? ' (child)' : '';
-        rssiHtml += '<div class="parent-hint">heard by ' + escapeHtml(repName) + tag + '</div>';
+        const heardLabel = sig.source === 'reported_links' ? 'best peer ' : 'heard by ';
+        rssiHtml += '<div class="parent-hint">' + heardLabel + escapeHtml(repName) + tag + '</div>';
       }
     }
     let rssiTip = '';
     if (allRep.length) {
+      const tipLabel = sig.source === 'reported_links' ? 'Peers (best→worst):\n' : 'Reporters (best→worst):\n';
       const lines = allRep.map(r => {
         const nm = r.name || (r.eui64 || '').slice(-4).toUpperCase();
         const rs = r.rssi != null ? (r.rssi + ' dBm') : '? dBm';
@@ -1881,21 +1887,22 @@ function renderNodesTable(nodes) {
         const ch = r.is_child ? ' (child)' : '';
         return nm + ': ' + rs + lq + ch;
       });
-      rssiTip = 'Reporters (best→worst):\n' + lines.join('\n');
+      rssiTip = tipLabel + lines.join('\n');
     }
     const rssiCell = el('td', {class: rssiClass(rssi), title: rssiTip, html: rssiHtml});
     const lqiCell = el('td', {class: lqiClass(lqi)}, lqi == null ? '—' : String(lqi));
 
     // Phase 4 delta cells.
     const txRetry1h = deltaForNode(n.eui64, '1h', 'tx_retry_count');
-    const parentDelta24h = deltaForNode(n.eui64, '24h', 'parent_change_count');
+    const isRouterClass = n.routing_role === 'leader' || n.device_kind === 'router' || n.device_kind === 'reed';
+    const parentDelta24h = isRouterClass ? undefined : deltaForNode(n.eui64, '24h', 'parent_change_count');
     const retryCell = el('td', {
       class: deltaClass(txRetry1h, 5, 20),
       html: fmtDelta(txRetry1h),
     });
     const parentCell = el('td', {
       class: deltaClass(parentDelta24h, 1, 3),
-      html: fmtDelta(parentDelta24h),
+      html: isRouterClass ? fmtDeltaNotApplicable() : fmtDelta(parentDelta24h),
     });
 
     const statusCls = n.status === 'online' ? 'good' : (n.status === 'offline' ? 'bad' : 'muted');

@@ -115,6 +115,29 @@ def test_get_latest_signal_strength(store) -> None:
     assert strength["lqi_avg"] == 190  # average of 200 and 180
 
 
+def test_get_latest_signal_strength_falls_back_to_reported_router_links(store) -> None:
+    router = "aa" * 8
+    peer_a = "bb" * 8
+    peer_b = "cc" * 8
+    store.upsert_node_metadata(eui64=router, friendly_name="Router A")
+    store.upsert_node_metadata(eui64=peer_a, friendly_name="Peer B")
+    store.upsert_node_metadata(eui64=peer_b, friendly_name="Peer C")
+    store.replace_links_for_reporter(router, "neighbor_table", [
+        {"neighbor_eui64": peer_a, "rssi_avg": -71, "lqi_out": 3, "is_child": False},
+        {"neighbor_eui64": peer_b, "rssi_avg": -64, "lqi_out": 2, "is_child": False},
+    ])
+
+    strength = nodes.get_latest_signal_strength(router, store=store)
+
+    assert strength["source"] == "reported_links"
+    assert strength["rssi"] == -64
+    assert strength["lqi"] == 3
+    assert strength["best_reporter"] is not None
+    assert strength["best_reporter"]["eui64"] == peer_b
+    assert strength["best_reporter"]["name"] == "Peer C"
+    assert [row["eui64"] for row in strength["neighbors"]] == [peer_b, peer_a]
+
+
 def _setup_three_router_partition(store) -> tuple[str, str, str]:
     """Set up an OTBR + two routers in one partition with route-table links.
 
