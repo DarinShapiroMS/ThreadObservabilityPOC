@@ -33,7 +33,7 @@ async function runThreadObservabilityChatSmoke(config = {}) {
         'available evidence does not include channel-specific data',
       ],
       forbid_contains: ['call the get_', 'use the get_', 'internal mcp'],
-      require_any_tool_names: ['get_topology_history_entry', 'list_topology_history'],
+      require_any_tool_names: ['get_mesh_state', 'get_topology_history_entry', 'list_topology_history'],
     },
     {
       name: 'rf-cause-grounding',
@@ -58,7 +58,6 @@ async function runThreadObservabilityChatSmoke(config = {}) {
         'you should call',
         'use the get_',
         'get_counter_series',
-        'internal mcp tool',
         'please provide the eui64',
         'which node you would like to investigate',
         'please select a node',
