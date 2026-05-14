@@ -21,3 +21,9 @@ def coerce_int(value: Any, *, allow_strings: bool = False) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def to_tristate_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return 1 if bool(value) else 0
