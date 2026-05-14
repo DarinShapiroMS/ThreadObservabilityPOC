@@ -47,3 +47,8 @@ Returns environment + health + active issues + up to 3 `recommended_next` tool c
 2. Install from the repository URL in Home Assistant.
 3. Configure options in add-on settings (`ha_admin_token` long-lived access token, optional retention overrides).
 4. Run tests: `cd app && PYTHONPATH=src pytest -q`.
+
+## Repository notes
+
+- `nodes.json` and `nodes_output.json` are legacy reference exports retained for offline inspection of node-shaping output. They are not runtime inputs for the add-on.
+- The ad hoc OTBR parser smoke helper lives at `../../scripts/test_real_logs.py` rather than the repository root.
