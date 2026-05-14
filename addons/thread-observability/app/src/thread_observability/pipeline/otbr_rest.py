@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 
 from ..storage.sqlite_store import SQLiteStore, get_store
-from ..utils.coercion import coerce_int
+from ..utils.coercion import coerce_int, to_tristate_int
 
 log = logging.getLogger(__name__)
 
@@ -357,9 +357,7 @@ def _otbr_coerce_int(v: Any) -> int | None:
 
 
 def _otbr_tri(v: Any) -> int | None:
-    if v is None:
-        return None
-    return 1 if v else 0
+    return to_tristate_int(v)
 
 
 def _decode_otbr_neighbors(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
