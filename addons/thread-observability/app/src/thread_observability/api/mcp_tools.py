@@ -760,7 +760,11 @@ def _build_partition_state(include_phantoms: bool = False) -> dict[str, Any]:
     re-commissioned EUI doesn't trigger a false "network split" reading.
     """
     s = get_store()
-    nodes = s.list_nodes()
+    nodes = nodes_mod.list_nodes_enriched(
+        store=s,
+        include_signal_strength=False,
+        include_phantoms=include_phantoms,
+    )
     live_euis = {
         n["eui64"] for n in nodes if n.get("eui64") and n.get("status") != "phantom"
     }
@@ -773,8 +777,6 @@ def _build_partition_state(include_phantoms: bool = False) -> dict[str, Any]:
             continue
         eui = n.get("eui64")
         if not eui:
-            continue
-        if not include_phantoms and n.get("status") == "phantom":
             continue
         partitions.setdefault(pid, []).append(eui)
         if n.get("routing_role") == "leader":
