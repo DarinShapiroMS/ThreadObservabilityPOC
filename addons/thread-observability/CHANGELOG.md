@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.19 — Model-aware retry strengthening for direct chat
+
+- **Model-aware retry budget.** Direct chat can now escalate tool-deferral retries based on the active provider/model profile instead of using a single fixed retry count for every model.
+- **Stronger second-pass instruction.** When a model keeps punting internal tool use back to the user, the follow-up retry message now strengthens the rule and requires either assistant-run tools or an explicit insufficient-evidence answer.
+- **Regression coverage.** Added focused tests for the model-aware retry budget and the second-retry path.
+
 ## 0.11.18 — Internal-tool-use prompt hardening
 
 - **Internal-service policy clarified.** Direct chat now explicitly treats MCP tools, functions, and internal data services as assistant-only capabilities rather than something the user can invoke directly.

@@ -84,6 +84,27 @@ class DirectChatTarget:
         return f"Direct {self.provider.title()} · {self.model}"
 
 
+def _tool_deferral_retry_budget(target: DirectChatTarget) -> int:
+    provider = str(target.provider or "").strip().lower()
+    model = str(target.model or "").strip().lower()
+    if provider == "cerebras" and ("llama3.1-8b" in model or "llama-3.1-8b" in model or "8b" in model):
+        return 2
+    return _MAX_TOOL_DEFERRAL_RETRIES
+
+
+def _tool_deferral_retry_message(attempt: int) -> str:
+    if attempt <= 1:
+        return (
+            "Do not tell me to use the available tools myself. Call the relevant tools now, then answer from the "
+            "observed results."
+        )
+    return (
+        "Do not ask me to call internal MCP tools, functions, or data services. You must either call the relevant "
+        "tools yourself now or answer explicitly that the currently available evidence is insufficient. Do not punt "
+        "tool use back to the user."
+    )
+
+
 def _normalize_provider(provider: str | None) -> str:
     return str(provider or "").strip().lower()
 
@@ -647,6 +668,7 @@ async def direct_chat_turn(
     conversation_id: str | None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
+    tool_deferral_retry_budget = _tool_deferral_retry_budget(target)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _DEFAULT_SYSTEM_PROMPT},
         {"role": "user", "content": rendered_message or message},
@@ -682,15 +704,12 @@ async def direct_chat_turn(
         )
         if not tool_calls:
             candidate_text = _extract_message_text(payload)
-            if tool_deferral_retries < _MAX_TOOL_DEFERRAL_RETRIES and _looks_like_tool_deferral(candidate_text):
+            if tool_deferral_retries < tool_deferral_retry_budget and _looks_like_tool_deferral(candidate_text):
                 tool_deferral_retries += 1
                 messages.append(
                     {
                         "role": "user",
-                        "content": (
-                            "Do not tell me to use the available tools myself. Call the relevant tools now, then "
-                            "answer from the observed results."
-                        ),
+                        "content": _tool_deferral_retry_message(tool_deferral_retries),
                     }
                 )
                 continue

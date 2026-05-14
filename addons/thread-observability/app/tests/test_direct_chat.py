@@ -222,6 +222,26 @@ def test_looks_like_tool_deferral_detects_internal_service_recommendation() -> N
     assert direct_chat._looks_like_tool_deferral(text) is True
 
 
+def test_tool_deferral_retry_budget_is_model_aware() -> None:
+    default_target = direct_chat.DirectChatTarget(
+        provider="openai",
+        model="gpt-5.4",
+        base_url="https://api.openai.com/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    smaller_target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama3.1-8b",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+
+    assert direct_chat._tool_deferral_retry_budget(default_target) == 1
+    assert direct_chat._tool_deferral_retry_budget(smaller_target) == 2
+
+
 def test_direct_chat_turn_retries_once_when_model_defers_tool_use(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
@@ -352,6 +372,74 @@ def test_direct_chat_turn_retries_when_model_tells_user_to_call_internal_service
     )
 
     assert result["response"]["text"] == "I checked the available evidence and the retained topology history is insufficient to answer that directly."
+    assert result["tool_calls"] == []
+
+
+def test_direct_chat_turn_uses_second_retry_for_model_profile(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama3.1-8b",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "You can use the get_health_snapshot tool to inspect the current mesh health.",
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 2:
+            retry_message = calls[1]["messages"][-1]
+            assert retry_message["role"] == "user"
+            assert "Do not tell me to use the available tools myself" in retry_message["content"]
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "I would recommend calling the get_health_snapshot function directly.",
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 3:
+            retry_message = calls[2]["messages"][-1]
+            assert retry_message["role"] == "user"
+            assert "Do not ask me to call internal MCP tools" in retry_message["content"]
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "I checked the current health snapshot and found no active mesh-wide degradation.",
+                        }
+                    }
+                ]
+            }
+        raise AssertionError(f"unexpected call count {len(calls)}")
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Which offline nodes look most suspicious right now?",
+            rendered_message="User message: Which offline nodes look most suspicious right now?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == "I checked the current health snapshot and found no active mesh-wide degradation."
     assert result["tool_calls"] == []
 
 
