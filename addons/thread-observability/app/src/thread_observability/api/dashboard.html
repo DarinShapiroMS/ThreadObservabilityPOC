@@ -1554,30 +1554,40 @@ function renderPartitionsCard(s) {
   }
   const splitBrain = parts.length > 1;
   const list = el('div', { class: 'partition-list' });
-  const names = new Map((s.all_nodes || []).map((node) => [String(node.eui64 || '').toLowerCase(), nodeDisplayName(node)]));
+  const allNodes = s.all_nodes || [];
+  const names = new Map(allNodes.map((node) => [String(node.eui64 || '').toLowerCase(), nodeDisplayName(node)]));
   for (const pp of parts) {
+    const partitionNodes = allNodes.filter((node) => String(node.partition_id || '') === String(pp.partition_id || ''));
     const leadName = pp.leader_name
       ? escapeHtml(pp.leader_name)
       : (pp.leader_eui64
           ? '<code>' + pp.leader_eui64.slice(-4).toUpperCase() + '</code>'
           : '<span class="muted">no leader</span>');
-    const count = (pp.member_count != null ? pp.member_count : (pp.node_count || 0));
+    const displayCount = partitionNodes.length;
+    const observedCount = (pp.member_count != null ? pp.member_count : (pp.node_count || 0));
     const channel = pp.channel != null ? (' · ch ' + pp.channel) : '';
     const netName = pp.network_name ? (' · <code>' + escapeHtml(pp.network_name) + '</code>') : '';
     const partTag = '<code>' + String(pp.partition_id).slice(-4).toUpperCase() + '</code>';
     const brain = splitBrain ? ' <span class="pill bad" title="More than one partition observed">split</span>' : '';
-    const members = (pp.members || []).map((eui) => names.get(String(eui || '').toLowerCase()) || shortEui(String(eui || ''))).slice(0, 4);
+    const members = partitionNodes.length
+      ? partitionNodes.map((node) => nodeDisplayName(node)).slice(0, 4)
+      : (pp.members || []).map((eui) => names.get(String(eui || '').toLowerCase()) || shortEui(String(eui || ''))).slice(0, 4);
     const preview = members.length
-      ? members.join(', ') + ((count > members.length) ? (' +' + (count - members.length) + ' more') : '')
+      ? members.join(', ') + ((displayCount > members.length) ? (' +' + (displayCount - members.length) + ' more') : '')
       : 'No member list captured yet.';
+    const observedMeta = observedCount > displayCount
+      ? '<span class="pill muted" title="Raw partition telemetry includes additional suppressed or non-canonical members">'
+          + observedCount + ' observed'
+        + '</span>'
+      : '<span class="pill muted">show members</span>';
     const btn = el('button', {
       class: 'partition-chip' + (String(networkPartitionFilter || '') === String(pp.partition_id || '') ? ' active' : ''),
       type: 'button',
     });
     btn.innerHTML =
       '<div class="partition-chip-head">'
-      + '<div class="partition-chip-title">' + partTag + brain + ' · ' + count + ' node' + (count === 1 ? '' : 's') + '</div>'
-      + '<span class="pill muted">show members</span>'
+      + '<div class="partition-chip-title">' + partTag + brain + ' · ' + displayCount + ' node' + (displayCount === 1 ? '' : 's') + '</div>'
+      + observedMeta
       + '</div>'
       + '<div class="partition-chip-meta">leader ' + leadName + channel + netName + '</div>'
       + '<div class="partition-members-preview">Members: ' + escapeHtml(preview) + '</div>';

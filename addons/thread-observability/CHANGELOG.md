@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.34 — Partition chip count alignment
+
+This patch fixes a Network-tab mismatch discovered during live 0.11.33
+validation.
+
+**Fixes:**
+- makes partition chips count the same canonical node rows that the Network
+  table actually displays when you click a partition filter
+- keeps extra raw partition telemetry as secondary "observed" context instead
+  of presenting it as the primary displayed node count
+- aligns the chip member preview with the filtered table population so the
+  click behavior is easier to understand
+
 ## 0.11.33 — Dashboard UX and graph usability
 
 This release packages the current dashboard usability improvements and the
