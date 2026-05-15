@@ -50,6 +50,16 @@ def test_dashboard_wires_expected_dashboard_endpoints() -> None:
     assert "v1/assessment/run-now" in html
 
 
+def test_dashboard_renders_assistant_markdown_safely() -> None:
+    client = TestClient(create_core_app())
+    html = client.get("/").text
+
+    assert "markdown-it" in html
+    assert "dompurify" in html.lower()
+    assert "renderAssistantMarkdown" in html
+    assert "DOMPurify.sanitize" in html
+
+
 def test_dashboard_uses_home_assistant_theme_tokens() -> None:
     client = TestClient(create_core_app())
     html = client.get("/").text

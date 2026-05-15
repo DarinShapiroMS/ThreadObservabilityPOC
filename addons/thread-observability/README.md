@@ -65,3 +65,12 @@ For API-surface regression without a Home Assistant deployment, run `PYTHONPATH=
 
 - The dashboard now prefers Home Assistant theme variables (for example `--primary-background-color`, `--ha-card-background`, `--primary-text-color`, `--secondary-text-color`, and `--accent-color`) so ingress surfaces track active HA light/dark themes.
 - We intentionally keep product-specific diagnostic colors for Thread role classes (Leader/Router/REED/FED/SED/phantom) and graph/risk overlays because those hues encode operational meaning across table pills, graph legend, and topology rendering.
+
+### Manual validation: chat markdown tables
+
+The dashboard chat panel renders assistant replies as a sanitized subset of Markdown (tables, lists, emphasis, inline code, fenced code blocks).
+
+To validate table rendering:
+1. Open the ingress dashboard, go to the Chat panel, and ask the agent to “Summarize the last health snapshot as a Markdown table”.
+2. Confirm the assistant response shows an actual HTML table (not raw pipe characters) and the table scrolls horizontally on narrow/mobile widths.
+3. Click “Copy” on the message to ensure the raw assistant text is copied to the clipboard.
