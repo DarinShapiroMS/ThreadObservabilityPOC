@@ -56,3 +56,7 @@ Version guard CI:
 Add-on CI:
 - Lints add-on metadata and builds amd64 image.
 - Workflow: .github/workflows/addon-ci.yml
+
+Copilot cloud agent setup:
+- Provisions the Copilot cloud agent environment and validates setup workflow changes.
+- Workflow: .github/workflows/copilot-setup-steps.yml
