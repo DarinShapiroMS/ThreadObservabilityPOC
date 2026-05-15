@@ -32,9 +32,44 @@ def test_health_classifies_nodes(store: SQLiteStore) -> None:
     snap = build_health_snapshot(store=store)
     s = snap["summary"]
     assert s["healthy_nodes"] == 1
+    assert s["online_nodes"] == 1
+    assert s["sleeping_nodes"] == 0
     assert s["stale_nodes"] == 1
     assert s["offline_nodes"] == 1
     assert s["total_nodes"] == 3
+
+
+def test_health_counts_sleeping_nodes_separately(store: SQLiteStore) -> None:
+    sleepy = "aa" * 8
+    parent = "bb" * 8
+    store.upsert_node_metadata(eui64=sleepy, device_id="shade-1")
+    store.upsert_node_metadata(eui64=parent)
+    store.set_node_diagnostics(parent, routing_role="router", partition_id=1234)
+    store.set_node_diagnostics(sleepy, routing_role="sleepy_end_device", partition_id=1234)
+    now = datetime.now(tz=UTC)
+    store.insert_event(eui64=parent, type="attach", ts=now.isoformat())
+    store.insert_event(eui64=sleepy, type="attach", ts=now.isoformat())
+    store.apply_availability([(sleepy, False, "ha_entity")])
+    store.replace_links_for_reporter(
+        parent,
+        "neighbor_table",
+        [{
+            "neighbor_eui64": sleepy,
+            "rssi_avg": -65,
+            "lqi_in": 3,
+            "is_child": True,
+        }],
+    )
+    store.recompute_node_statuses(offline_seconds=900, phantom_seconds=24 * 3600)
+
+    snap = build_health_snapshot(store=store)
+    s = snap["summary"]
+    assert s["online_nodes"] == 1
+    assert s["sleeping_nodes"] == 1
+    assert s["healthy_nodes"] == 1
+    assert s["offline_nodes"] == 0
+    assert s["stale_nodes"] == 0
+    assert s["total_nodes"] == 2
 
 
 def test_health_reflects_critical_issues(store: SQLiteStore) -> None:

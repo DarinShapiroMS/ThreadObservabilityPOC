@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.49 — Local API regression harness and health alignment
+
+This patch closes the health-snapshot semantic mismatch and makes the API
+surface regression-testable without a Home Assistant deployment.
+
+**Fixes:**
+- aligns `get_health_snapshot()` with the enriched backend node view so
+  sleeping devices are counted correctly and health totals match `/v1/dev/status`
+- adds an in-process API smoke runner that seeds local SQLite state and exercises
+  health, topology, routing, assessment, chat telemetry, and prompt-regression
+  HTTP endpoints without HA
+- wires the new no-HA API regression path into CI before the add-on image build
+
 ## 0.11.48 — API-only chat reasoning follow-up
 
 This patch removes UI-shaped prompt material from the direct-chat reasoning

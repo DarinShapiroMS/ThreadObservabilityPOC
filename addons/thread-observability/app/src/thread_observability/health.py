@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from .pipeline.nodes import list_nodes_enriched
 from .storage.sqlite_store import SQLiteStore, get_store
 from .utils.datetime import parse_iso_datetime
 
@@ -22,11 +23,9 @@ def build_health_snapshot(*, store: SQLiteStore | None = None) -> dict[str, Any]
     now = datetime.now(tz=UTC)
     stale_cutoff = (now - timedelta(minutes=STALE_THRESHOLD_MIN)).isoformat()
     offline_cutoff = (now - timedelta(minutes=OFFLINE_THRESHOLD_MIN)).isoformat()
+    node_summaries = list_nodes_enriched(store=s, include_signal_strength=False, include_phantoms=False)
 
     with s._lock:  # noqa: SLF001
-        node_rows = s._conn.execute(  # noqa: SLF001
-            "SELECT eui64, last_seen FROM nodes"
-        ).fetchall()
         newest = s._conn.execute(  # noqa: SLF001
             "SELECT MAX(ts) FROM events"
         ).fetchone()[0]
@@ -62,17 +61,21 @@ def build_health_snapshot(*, store: SQLiteStore | None = None) -> dict[str, Any]
             """
         ).fetchone()
 
-    healthy = stale = offline = 0
-    for r in node_rows:
-        ls = r["last_seen"]
-        if not ls:
+    online = sleeping = stale = offline = 0
+    for row in node_summaries:
+        status = str(row.get("status") or "online").strip().lower()
+        if status == "sleeping":
+            sleeping += 1
+            continue
+        last_seen = row.get("last_seen")
+        if not last_seen:
             offline += 1
-        elif ls < offline_cutoff:
+        elif str(last_seen) < offline_cutoff:
             offline += 1
-        elif ls < stale_cutoff:
+        elif str(last_seen) < stale_cutoff:
             stale += 1
         else:
-            healthy += 1
+            online += 1
 
     active = s.list_active_issues()
     by_sev: dict[str, int] = {}
@@ -96,10 +99,12 @@ def build_health_snapshot(*, store: SQLiteStore | None = None) -> dict[str, Any]
         "status": overall,
         "data_age_seconds": data_age,
         "summary": {
-            "healthy_nodes": healthy,
+            "healthy_nodes": online,
+            "online_nodes": online,
+            "sleeping_nodes": sleeping,
             "stale_nodes": stale,
             "offline_nodes": offline,
-            "total_nodes": len(node_rows),
+            "total_nodes": len(node_summaries),
             "duplicate_physical_device_groups": int(dup_phys_row["dup_group_count"] or 0),
             "duplicate_physical_device_rows": int(dup_phys_row["rows_in_dup_groups"] or 0),
             "distinct_thread_networks": int(distinct_epids_row["c"] or 0),

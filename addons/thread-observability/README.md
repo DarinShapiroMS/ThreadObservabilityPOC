@@ -2,7 +2,7 @@
 
 Ingests Thread/Matter logs, enriches with Home Assistant metadata, and exposes the result over MCP and a small HTTP surface for AI-assisted triage.
 
-**Current version**: 0.11.48 / schema v19 / 41 MCP tools.
+**Current version**: 0.11.49 / schema v19 / 41 MCP tools.
 
 ## What it does
 
@@ -47,6 +47,8 @@ Returns environment + health + active issues + up to 3 `recommended_next` tool c
 2. Install from the repository URL in Home Assistant.
 3. Configure options in add-on settings (`ha_admin_token` long-lived access token, optional retention overrides).
 4. Run tests: `cd app && PYTHONPATH=src pytest -q`.
+
+For API-surface regression without a Home Assistant deployment, run `PYTHONPATH=app/src python ../../scripts/api_surface_smoke.py` from `addons/thread-observability`.
 
 ## Repository notes
 
