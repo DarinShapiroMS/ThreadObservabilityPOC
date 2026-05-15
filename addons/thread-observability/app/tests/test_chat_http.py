@@ -769,3 +769,95 @@ def test_chat_turn_skips_persisted_transcripts_when_disabled(monkeypatch: pytest
 
     assert response.status_code == 200
     assert store.get_chat_session_memory("conv-1") is None
+
+
+def test_chat_turn_persists_and_returns_direct_transcript(monkeypatch: pytest.MonkeyPatch, store: SQLiteStore) -> None:
+    cfg = _chat_enabled_config(
+        ai=AIConfig(
+            enabled=True,
+            provider="cerebras",
+            chat_backend="direct",
+            model="llama-4-scout",
+            api_key="secret",
+        ),
+        chat=ChatConfig(enabled=True, persist_transcripts=True),
+    )
+
+    async def fake_direct_turn(*, target, message: str, rendered_message: str, conversation_id: str | None):  # noqa: ANN001
+        return {
+            "conversation_id": str(conversation_id or "conv-direct"),
+            "agent_id": target.agent_id,
+            "response": {"text": "direct reply", "card": None},
+            "tool_calls": [{"name": "get_health_snapshot", "arguments": {}, "result": {"ok": True}}],
+            "transcript": {
+                "kind": "direct_chat",
+                "rendered_message": rendered_message,
+                "events": [
+                    {
+                        "kind": "assistant_completion",
+                        "request": {"messages": [{"role": "user", "content": rendered_message}]},
+                        "response": {"choices": [{"message": {"content": "direct reply"}}]},
+                    },
+                    {"kind": "audit_review", "request": {"messages": []}, "response": {"choices": []}},
+                ],
+                "final_text": "direct reply",
+            },
+            "duration_ms": 4,
+            "model": target.model,
+            "streaming": False,
+        }
+
+    import thread_observability.api.http_api as http_api
+
+    monkeypatch.setattr(http_api, "get_config", lambda: cfg)
+    monkeypatch.setattr(direct_chat, "direct_chat_turn", fake_direct_turn)
+    client = TestClient(create_core_app())
+
+    turn = client.post("/v1/chat/turn", json={"message": "hello", "conversation_id": "conv-direct"})
+
+    assert turn.status_code == 200
+    assert "transcript" not in turn.json()
+    persisted = store.get_chat_session_memory("conv-direct")
+    assert persisted is not None
+    turns = persisted["payload"]["transcript_turns"]
+    assert turns[0]["backend"] == "direct"
+    assert turns[0]["transcript"]["events"][0]["kind"] == "assistant_completion"
+
+    transcript = client.get("/v1/chat/transcript/conv-direct")
+
+    assert transcript.status_code == 200
+    body = transcript.json()
+    assert body["conversation_id"] == "conv-direct"
+    assert body["turn_count"] == 1
+    assert body["transcript_turns"][0]["response_text"] == "direct reply"
+    assert body["transcript_turns"][0]["transcript"]["events"][1]["kind"] == "audit_review"
+
+
+def test_chat_turn_persists_ha_proxy_exchange_and_exposes_transcript(monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _chat_enabled_config(chat=ChatConfig(enabled=True, persist_transcripts=True))
+
+    async def fake_process(*, text: str, conversation_id: str | None = None, agent_id: str | None = None) -> dict[str, object]:
+        return {
+            "conversation_id": "conv-ha",
+            "agent_id": agent_id or "conversation.claude",
+            "response": {
+                "speech": {"plain": {"speech": "hello from HA"}},
+                "data": {"tool_calls": [{"name": "start_triage"}]},
+            },
+        }
+
+    import thread_observability.api.http_api as http_api
+
+    monkeypatch.setattr(http_api, "get_config", lambda: cfg)
+    monkeypatch.setattr(supervisor_client, "conversation_process", fake_process)
+    client = TestClient(create_core_app())
+
+    response = client.post("/v1/chat/turn", json={"message": "hello", "conversation_id": "conv-ha"})
+    assert response.status_code == 200
+
+    transcript = client.get("/v1/chat/transcript/conv-ha")
+    assert transcript.status_code == 200
+    body = transcript.json()
+    assert body["transcript_turns"][0]["backend"] == "ha"
+    assert body["transcript_turns"][0]["transcript"]["kind"] == "ha_conversation_proxy"
+    assert body["transcript_turns"][0]["transcript"]["rendered_message"].endswith("User message: hello")

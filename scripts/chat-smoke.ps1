@@ -12,7 +12,9 @@ param(
 
     [switch]$DryRun,
 
-    [switch]$SkipStats
+    [switch]$SkipStats,
+
+    [switch]$SkipTranscript
 )
 
 $ErrorActionPreference = 'Stop'
@@ -94,6 +96,98 @@ function Get-ToolNames {
     return $names
 }
 
+function Get-NestedValue {
+    param(
+        [object]$Object,
+        [string[]]$Path
+    )
+
+    $current = $Object
+    foreach ($segment in $Path) {
+        if ($null -eq $current) {
+            return $null
+        }
+        if ($current -is [System.Collections.IList] -and $segment -match '^\d+$') {
+            $index = [int]$segment
+            if ($index -lt 0 -or $index -ge $current.Count) {
+                return $null
+            }
+            $current = $current[$index]
+            continue
+        }
+        if ($current -is [hashtable]) {
+            if (-not $current.ContainsKey($segment)) {
+                return $null
+            }
+            $current = $current[$segment]
+            continue
+        }
+        if ($current -is [psobject]) {
+            $property = $current.PSObject.Properties[$segment]
+            if ($null -eq $property) {
+                return $null
+            }
+            $current = $property.Value
+            continue
+        }
+        return $null
+    }
+    return $current
+}
+
+function Get-TranscriptEventKinds {
+    param([object]$TranscriptTurn)
+
+    $events = @(Get-NestedValue -Object $TranscriptTurn -Path @('transcript', 'events'))
+    $kinds = @()
+    foreach ($event in $events) {
+        $kind = Get-NestedValue -Object $event -Path @('kind')
+        if ($kind) {
+            $kinds += [string]$kind
+        }
+    }
+    return $kinds
+}
+
+function Get-TranscriptAnswerTexts {
+    param([object]$TranscriptTurn)
+
+    $events = @(Get-NestedValue -Object $TranscriptTurn -Path @('transcript', 'events'))
+    $texts = @()
+    foreach ($event in $events) {
+        $kind = [string](Get-NestedValue -Object $event -Path @('kind'))
+        if ($kind -ne 'assistant_completion') {
+            continue
+        }
+        $content = Get-NestedValue -Object $event -Path @('response', 'choices', '0', 'message', 'content')
+        if ($content -is [string] -and $content.Trim()) {
+            $texts += $content.Trim()
+        }
+    }
+    return $texts
+}
+
+function Get-TranscriptReviewerText {
+    param([object]$TranscriptTurn)
+
+    $events = @(Get-NestedValue -Object $TranscriptTurn -Path @('transcript', 'events'))
+    $blocks = @()
+    foreach ($event in $events) {
+        $kind = [string](Get-NestedValue -Object $event -Path @('kind'))
+        if ($kind -notin @('audit_review', 'answer_review')) {
+            continue
+        }
+        $messages = @(Get-NestedValue -Object $event -Path @('request', 'messages'))
+        foreach ($message in $messages) {
+            $content = Get-NestedValue -Object $message -Path @('content')
+            if ($content -is [string] -and $content.Trim()) {
+                $blocks += $content.Trim()
+            }
+        }
+    }
+    return ($blocks -join "`n`n")
+}
+
 function Test-ContainsAny {
     param(
         [string]$Text,
@@ -147,6 +241,7 @@ if (-not $cases.Count) {
 $trimmedBaseUrl = $BaseUrl.TrimEnd('/')
 $chatTurnUrl = "$trimmedBaseUrl/v1/chat/turn"
 $chatStatsUrl = "$trimmedBaseUrl/v1/chat/stats"
+$chatTranscriptBaseUrl = "$trimmedBaseUrl/v1/chat/transcript"
 
 $headers = @{ Accept = 'application/json' }
 if ($Token) {
@@ -181,6 +276,11 @@ for ($index = 0; $index -lt $cases.Count; $index += 1) {
     $payload.Remove('require_tool_names')
     $payload.Remove('require_any_tool_names')
     $payload.Remove('forbid_tool_names')
+    $payload.Remove('require_transcript_event_kinds')
+    $payload.Remove('expect_initial_any_contains')
+    $payload.Remove('forbid_initial_contains')
+    $payload.Remove('expect_reviewer_any_contains')
+    $payload.Remove('forbid_reviewer_contains')
     $payload['message'] = $message
     $payload['streaming'] = $false
     if ($AgentId) {
@@ -210,8 +310,28 @@ for ($index = 0; $index -lt $cases.Count; $index += 1) {
         $responseText = [string]$response.response.text
     }
     $toolNames = @(Get-ToolNames -ToolCalls $response.tool_calls)
+    $transcriptTurn = $null
+    $transcriptEventKinds = @()
+    $initialAnswers = @()
+    $reviewerText = ''
 
     $failures = @()
+    if (-not $SkipTranscript) {
+        try {
+            $transcriptUrl = "$chatTranscriptBaseUrl/$($payload['conversation_id'])"
+            $transcriptResponse = Invoke-RestMethod -Method Get -Uri $transcriptUrl -Headers $headers
+            $turns = @(Get-NestedValue -Object $transcriptResponse -Path @('transcript_turns'))
+            if ($turns.Count -gt 0) {
+                $transcriptTurn = $turns[0]
+                $transcriptEventKinds = @(Get-TranscriptEventKinds -TranscriptTurn $transcriptTurn)
+                $initialAnswers = @(Get-TranscriptAnswerTexts -TranscriptTurn $transcriptTurn)
+                $reviewerText = [string](Get-TranscriptReviewerText -TranscriptTurn $transcriptTurn)
+            }
+        }
+        catch {
+            $failures += "transcript fetch failed: $($_.Exception.Message)"
+        }
+    }
     if (-not $responseText.Trim()) {
         $failures += 'empty response text'
     }
@@ -250,11 +370,40 @@ for ($index = 0; $index -lt $cases.Count; $index += 1) {
             }
         }
     }
+    if (-not $SkipTranscript) {
+        if (-not $transcriptTurn) {
+            $failures += 'missing persisted transcript turn'
+        }
+        if ($case.require_transcript_event_kinds) {
+            foreach ($requiredEventKind in @($case.require_transcript_event_kinds)) {
+                if ($transcriptEventKinds -notcontains [string]$requiredEventKind) {
+                    $failures += "missing required transcript event: $requiredEventKind"
+                }
+            }
+        }
+        $initialAnswerText = if ($initialAnswers.Count) { [string]$initialAnswers[0] } else { '' }
+        if ($case.expect_initial_any_contains -and -not (Test-ContainsAny -Text $initialAnswerText -Needles $case.expect_initial_any_contains)) {
+            $failures += 'initial answer missing any expected phrase'
+        }
+        if ($case.forbid_initial_contains -and -not (Test-ContainsNone -Text $initialAnswerText -Needles $case.forbid_initial_contains)) {
+            $failures += 'initial answer contained a forbidden phrase'
+        }
+        if ($case.expect_reviewer_any_contains -and -not (Test-ContainsAny -Text $reviewerText -Needles $case.expect_reviewer_any_contains)) {
+            $failures += 'reviewer prompt missing any expected phrase'
+        }
+        if ($case.forbid_reviewer_contains -and -not (Test-ContainsNone -Text $reviewerText -Needles $case.forbid_reviewer_contains)) {
+            $failures += 'reviewer prompt contained a forbidden phrase'
+        }
+    }
 
     $results += [pscustomobject]@{
         Name = $caseName
         Status = $(if ($failures.Count) { 'FAIL' } else { 'PASS' })
         ToolCalls = ($toolNames -join ', ')
+        TranscriptEvents = ($transcriptEventKinds -join ', ')
+        InitialAnswer = $(if ($initialAnswers.Count) { [string]$initialAnswers[0] } else { '' })
+        FinalAnswer = $responseText
+        ReviewerPrompt = $reviewerText
         Response = $responseText
         Failure = ($failures -join '; ')
     }

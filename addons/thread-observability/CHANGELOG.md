@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.11.57 — Persist full chat transcripts and inspect them in smoke runs
+
+This patch keeps the exact observable chat exchange for persisted sessions so
+direct-chat failures can be debugged from the stored turn itself instead of
+manual copy-paste, and extends the smoke tooling to inspect reviewer and
+rewrite behavior through those saved transcripts.
+
+**Fixes:**
+- persists bounded full chat transcripts per conversation, including direct
+  chat completion payloads, tool results, audit/reviewer exchanges, retry
+  instructions, and HA proxy request/response envelopes when transcript
+  persistence is enabled
+- adds `GET /v1/chat/transcript/{conversation_id}` so a saved session can be
+  inspected by conversation id after a live or local chat turn
+- extends local and live chat smoke helpers to fetch the stored transcript,
+  inspect initial assistant answers plus reviewer prompts, and score
+  transcript-level expectations in addition to final answer text
+- adds focused regression coverage for transcript persistence and retrieval
+
 ## 0.11.56 — Add retained link signal history and clearer tool routing
 
 This patch adds retained per-link signal history so network-change questions

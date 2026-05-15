@@ -18,6 +18,8 @@ async function runThreadObservabilityChatSmoke(config = {}) {
   const defaults = {
     agent_id: 'direct:cerebras',
     streaming: false,
+    require_transcript_event_kinds: ['assistant_completion', 'audit_review'],
+    expect_reviewer_any_contains: ['Policy bundle:', 'Candidate answer:'],
     page_context: base,
   };
 
@@ -76,9 +78,24 @@ async function runThreadObservabilityChatSmoke(config = {}) {
 
   const statsUrl = new URL('v1/chat/stats', window.location.href).toString();
   const turnUrl = new URL('v1/chat/turn', window.location.href).toString();
+  const transcriptUrlFor = (conversationId) => new URL(`v1/chat/transcript/${conversationId}`, window.location.href).toString();
 
   const lower = (value) => String(value ?? '').toLowerCase();
   const toolNames = (rows) => Array.isArray(rows) ? rows.map((row) => String(row?.name || '')).filter(Boolean) : [];
+  const transcriptEventKinds = (turn) => Array.isArray(turn?.transcript?.events)
+    ? turn.transcript.events.map((event) => String(event?.kind || '')).filter(Boolean)
+    : [];
+  const transcriptAnswerTexts = (turn) => (Array.isArray(turn?.transcript?.events) ? turn.transcript.events : [])
+    .filter((event) => event?.kind === 'assistant_completion')
+    .map((event) => event?.response?.choices?.[0]?.message?.content)
+    .filter((text) => typeof text === 'string' && text.trim())
+    .map((text) => text.trim());
+  const transcriptReviewerText = (turn) => (Array.isArray(turn?.transcript?.events) ? turn.transcript.events : [])
+    .filter((event) => event?.kind === 'audit_review' || event?.kind === 'answer_review')
+    .flatMap((event) => Array.isArray(event?.request?.messages) ? event.request.messages : [])
+    .map((message) => (typeof message?.content === 'string' ? message.content.trim() : ''))
+    .filter(Boolean)
+    .join('\n\n');
   const merge = (baseValue, overrideValue) => {
     if (!overrideValue || typeof overrideValue !== 'object' || Array.isArray(overrideValue)) {
       return overrideValue === undefined ? baseValue : overrideValue;
@@ -112,7 +129,13 @@ async function runThreadObservabilityChatSmoke(config = {}) {
     delete payload.require_tool_names;
     delete payload.require_any_tool_names;
     delete payload.forbid_tool_names;
+    delete payload.require_transcript_event_kinds;
+    delete payload.expect_initial_any_contains;
+    delete payload.forbid_initial_contains;
+    delete payload.expect_reviewer_any_contains;
+    delete payload.forbid_reviewer_contains;
     payload.streaming = false;
+    payload.conversation_id = payload.conversation_id || `chat-smoke-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
     const turn = await fetchJson(turnUrl, {
       method: 'POST',
@@ -123,6 +146,12 @@ async function runThreadObservabilityChatSmoke(config = {}) {
     const names = toolNames(turn.data?.tool_calls);
     const namesLower = names.map(lower);
     const failures = [];
+    const transcriptResponse = await fetchJson(transcriptUrlFor(payload.conversation_id), { method: 'GET', headers: {} });
+    const transcriptTurn = Array.isArray(transcriptResponse.data?.transcript_turns) ? transcriptResponse.data.transcript_turns[0] : null;
+    const eventKinds = transcriptEventKinds(transcriptTurn);
+    const initialAnswers = transcriptAnswerTexts(transcriptTurn);
+    const reviewerText = transcriptReviewerText(transcriptTurn);
+    const initialText = initialAnswers[0] || '';
 
     if (Array.isArray(row.expect_all_contains) && !row.expect_all_contains.every((part) => textLower.includes(lower(part)))) {
       failures.push('missing one or more required phrases');
@@ -154,6 +183,36 @@ async function runThreadObservabilityChatSmoke(config = {}) {
         }
       }
     }
+    if (!transcriptTurn) {
+      failures.push('missing persisted transcript turn');
+    }
+    if (Array.isArray(row.require_transcript_event_kinds)) {
+      for (const part of row.require_transcript_event_kinds) {
+        if (!eventKinds.includes(String(part))) {
+          failures.push(`missing required transcript event: ${part}`);
+        }
+      }
+    }
+    if (Array.isArray(row.expect_initial_any_contains) && !row.expect_initial_any_contains.some((part) => lower(initialText).includes(lower(part)))) {
+      failures.push('initial answer missing any expected phrase');
+    }
+    if (Array.isArray(row.forbid_initial_contains)) {
+      for (const part of row.forbid_initial_contains) {
+        if (lower(initialText).includes(lower(part))) {
+          failures.push(`initial answer contained forbidden phrase: ${part}`);
+        }
+      }
+    }
+    if (Array.isArray(row.expect_reviewer_any_contains) && !row.expect_reviewer_any_contains.some((part) => lower(reviewerText).includes(lower(part)))) {
+      failures.push('reviewer prompt missing any expected phrase');
+    }
+    if (Array.isArray(row.forbid_reviewer_contains)) {
+      for (const part of row.forbid_reviewer_contains) {
+        if (lower(reviewerText).includes(lower(part))) {
+          failures.push(`reviewer prompt contained forbidden phrase: ${part}`);
+        }
+      }
+    }
 
     results.push({
       name: row.name,
@@ -162,6 +221,10 @@ async function runThreadObservabilityChatSmoke(config = {}) {
       failures,
       text,
       toolNames: names,
+      transcriptEventKinds: eventKinds,
+      initialAnswer: initialText,
+      reviewerPrompt: reviewerText,
+      conversationId: payload.conversation_id,
     });
   }
 

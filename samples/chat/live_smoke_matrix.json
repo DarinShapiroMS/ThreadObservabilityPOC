@@ -2,6 +2,14 @@
   "defaults": {
     "agent_id": "direct:cerebras",
     "streaming": false,
+    "require_transcript_event_kinds": [
+      "assistant_completion",
+      "audit_review"
+    ],
+    "expect_reviewer_any_contains": [
+      "Policy bundle:",
+      "Candidate answer:"
+    ],
     "page_context": {
       "page": "dashboard",
       "active_tab": "diagnostics",

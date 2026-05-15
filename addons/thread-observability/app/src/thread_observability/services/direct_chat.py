@@ -268,6 +268,13 @@ def _extract_message(payload: dict[str, Any]) -> dict[str, Any]:
     return message
 
 
+def _json_copy(value: Any) -> Any:
+    try:
+        return json.loads(json.dumps(value))
+    except Exception:  # noqa: BLE001
+        return value
+
+
 def _chat_tools() -> list[dict[str, Any]]:
     from ..api import mcp_tools
 
@@ -700,6 +707,7 @@ async def _evaluate_answer_candidate(
     counter_question: bool,
     history_comparison_question: bool,
     node_question: bool,
+    transcript_events: list[dict[str, Any]] | None = None,
 ) -> AnswerReview:
     review_target = _answer_review_target(target)
     body = {
@@ -741,6 +749,15 @@ async def _evaluate_answer_candidate(
         payload = await _post_chat_completions(review_target, body)
     except Exception:
         return AnswerReview(verdict="pass")
+    if transcript_events is not None:
+        transcript_events.append(
+            {
+                "kind": "answer_review",
+                "model": review_target.model,
+                "request": _json_copy(body),
+                "response": _json_copy(payload),
+            }
+        )
     return _parse_answer_review(payload)
 
 
@@ -757,6 +774,7 @@ async def _audit_answer_candidate(
     counter_question: bool,
     history_comparison_question: bool,
     node_question: bool,
+    transcript_events: list[dict[str, Any]] | None = None,
 ) -> AuditVerdict:
     review_target = _answer_review_target(target)
     tool_catalog_summary = _audit_tool_catalog_summary(available_tools)
@@ -813,6 +831,15 @@ async def _audit_answer_candidate(
         payload = await _post_chat_completions(review_target, body)
     except Exception:
         return AuditVerdict()
+    if transcript_events is not None:
+        transcript_events.append(
+            {
+                "kind": "audit_review",
+                "model": review_target.model,
+                "request": _json_copy(body),
+                "response": _json_copy(payload),
+            }
+        )
     return _parse_audit_verdict(payload)
 
 
@@ -1132,6 +1159,7 @@ async def direct_chat_turn(
     audit_evidence_retries = 0
     topology_history_empty_hints = 0
     final_text = ""
+    transcript_events: list[dict[str, Any]] = []
     node_question = _looks_like_node_question(message)
     history_comparison_question = _looks_like_history_comparison_question(message)
     counter_question = _looks_like_counter_or_rf_question(message)
@@ -1147,6 +1175,14 @@ async def direct_chat_turn(
             "stream": False,
         }
         payload = await _post_chat_completions(target, body)
+        transcript_events.append(
+            {
+                "kind": "assistant_completion",
+                "model": target.model,
+                "request": _json_copy(body),
+                "response": _json_copy(payload),
+            }
+        )
         assistant_message = _extract_message(payload)
         tool_calls = _extract_tool_calls(assistant_message)
         assistant_content = assistant_message.get("content")
@@ -1172,25 +1208,30 @@ async def direct_chat_turn(
                 counter_question=counter_question,
                 history_comparison_question=history_comparison_question,
                 node_question=node_question,
+                transcript_events=transcript_events,
             )
             )
             if audit.requires_missing_evidence and audit_evidence_retries < 1:
                 audit_evidence_retries += 1
+                retry_message = _audit_missing_evidence_message(audit)
                 messages.append(
                     {
                         "role": "system",
-                        "content": _audit_missing_evidence_message(audit),
+                        "content": retry_message,
                     }
                 )
+                transcript_events.append({"kind": "system_retry", "reason": "missing_evidence", "content": retry_message})
                 continue
             if audit.requires_rewrite and audit_rewrite_retries < 1:
                 audit_rewrite_retries += 1
+                retry_message = _audit_retry_message(audit)
                 messages.append(
                     {
                         "role": "system",
-                        "content": _audit_retry_message(audit),
+                        "content": retry_message,
                     }
                 )
+                transcript_events.append({"kind": "system_retry", "reason": "rewrite", "content": retry_message})
                 continue
             final_text = candidate_text
             break
@@ -1210,6 +1251,13 @@ async def direct_chat_turn(
                     "name": tool_call["name"],
                     "arguments": tool_call["arguments"],
                     "result": result,
+                }
+            )
+            transcript_events.append(
+                {
+                    "kind": "tool_result",
+                    "tool_call": _json_copy(tool_call),
+                    "result": _json_copy(result),
                 }
             )
             messages.append(
@@ -1240,6 +1288,13 @@ async def direct_chat_turn(
                         ),
                     }
                 )
+                transcript_events.append(
+                    {
+                        "kind": "system_hint",
+                        "reason": "topology_history_empty",
+                        "content": messages[-1]["content"],
+                    }
+                )
         exact_count_response = _build_exact_count_response(context_message, tool_trace)
         if exact_count_response is not None:
             final_text = exact_count_response
@@ -1259,6 +1314,13 @@ async def direct_chat_turn(
         "agent_id": target.agent_id,
         "response": {"text": final_text, "card": None},
         "tool_calls": tool_trace,
+        "transcript": {
+            "kind": "direct_chat",
+            "message": message,
+            "rendered_message": context_message,
+            "events": transcript_events,
+            "final_text": final_text,
+        },
         "duration_ms": duration_ms,
         "model": target.model,
         "streaming": False,

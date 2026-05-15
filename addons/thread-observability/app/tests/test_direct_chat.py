@@ -82,6 +82,9 @@ def test_direct_chat_turn_executes_mcp_tool_and_returns_trace(monkeypatch) -> No
     tool_message = next(msg for msg in calls[1]["messages"] if msg.get("role") == "tool")
     assert tool_message["role"] == "tool"
     assert json.loads(tool_message["content"])["data"]["status"] == "healthy"
+    assert result["transcript"]["kind"] == "direct_chat"
+    assert any(event["kind"] == "assistant_completion" for event in result["transcript"]["events"])
+    assert any(event["kind"] == "tool_result" for event in result["transcript"]["events"])
 
 
 def test_direct_chat_turn_compacts_large_tool_results_for_prompt(monkeypatch) -> None:

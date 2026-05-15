@@ -36,7 +36,7 @@ def _build_config() -> ThreadObsConfig:
             model="llama-4-scout",
             api_key="local-smoke",
         ),
-        chat=ChatConfig(enabled=True),
+        chat=ChatConfig(enabled=True, persist_transcripts=True),
         retention=RetentionConfig(),
         assessment=AssessmentConfig(enabled=True),
     )
@@ -252,6 +252,29 @@ def _patched_runtime(store: SQLiteStore, cfg: ThreadObsConfig) -> Iterator[dict[
             "agent_id": target.agent_id,
             "response": {"text": f"local-smoke::{message}", "card": None},
             "tool_calls": [],
+            "transcript": {
+                "kind": "direct_chat",
+                "message": message,
+                "rendered_message": rendered_message,
+                "events": [
+                    {
+                        "kind": "assistant_completion",
+                        "request": {"messages": [{"role": "user", "content": rendered_message}]},
+                        "response": {"choices": [{"message": {"content": f"draft::{message}"}}]},
+                    },
+                    {
+                        "kind": "audit_review",
+                        "request": {"messages": [{"role": "user", "content": "Policy bundle:\n- local smoke"}]},
+                        "response": {"choices": [{"message": {"content": '{"answered_question":true}'}}]},
+                    },
+                    {
+                        "kind": "assistant_completion",
+                        "request": {"messages": [{"role": "system", "content": "retry"}]},
+                        "response": {"choices": [{"message": {"content": f"local-smoke::{message}"}}]},
+                    },
+                ],
+                "final_text": f"local-smoke::{message}",
+            },
             "duration_ms": 1,
             "model": target.model,
             "streaming": False,
@@ -365,6 +388,16 @@ def run_smoke(prompts_path: Path) -> None:
                     )
                     text = ((body.get("response") or {}).get("text") if isinstance(body.get("response"), dict) else "")
                     assert text == f"local-smoke::{prompt}"
+                    conversation_id = str(body.get("conversation_id") or "")
+                    transcript = _assert_status(
+                        f"/v1/chat/transcript [{case_id}]",
+                        client.get(f"/v1/chat/transcript/{conversation_id}"),
+                    )
+                    turns = transcript.get("transcript_turns") or []
+                    assert len(turns) >= 1
+                    assert turns[0].get("backend") == "direct"
+                    events = ((turns[0].get("transcript") or {}).get("events") or [])
+                    assert [row.get("kind") for row in events[:2]] == ["assistant_completion", "audit_review"]
 
                 for prompt, rendered_message in runtime["seen_messages"]:
                     assert prompt in rendered_message
@@ -372,7 +405,7 @@ def run_smoke(prompts_path: Path) -> None:
                     assert "graph_diagnostics" not in rendered_message
                     assert "active_tab" not in rendered_message
 
-                print(f"API smoke passed: 16 endpoints + {len(prompts)} chat prompts")
+                print(f"API smoke passed: 17 endpoints + {len(prompts)} chat prompts")
         finally:
             chat_memory.reset()
             reset_store_for_tests(None)

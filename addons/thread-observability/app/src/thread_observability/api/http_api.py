@@ -697,12 +697,17 @@ def create_core_app() -> FastAPI:
                     conversation_id=conversation_id,
                 )
                 if result.get("conversation_id"):
+                    transcript = result.pop("transcript", None)
                     chat_memory.record_turn(
                         conversation_id=str(result["conversation_id"]),
                         message=message,
                         page_context=page_context,
                         tool_calls=result.get("tool_calls") if isinstance(result.get("tool_calls"), list) else None,
                         response_text=((result.get("response") or {}).get("text") if isinstance(result.get("response"), dict) else None),
+                        backend="direct",
+                        agent_id=str(result.get("agent_id") or "").strip() or None,
+                        model_name=str(result.get("model") or target.model or "").strip() or None,
+                        transcript=transcript if isinstance(transcript, dict) else None,
                         persist=bool(cfg.chat.persist_transcripts),
                         persist_days=int(cfg.retention.chat_days),
                     )
@@ -803,12 +808,21 @@ def create_core_app() -> FastAPI:
             duration_ms=duration_ms,
         )
         if result.get("conversation_id"):
+            transcript = {
+                "kind": "ha_conversation_proxy",
+                "rendered_message": rendered_message,
+                "upstream_response": upstream,
+            }
             chat_memory.record_turn(
                 conversation_id=str(result["conversation_id"]),
                 message=message,
                 page_context=page_context,
                 tool_calls=result.get("tool_calls") if isinstance(result.get("tool_calls"), list) else None,
                 response_text=((result.get("response") or {}).get("text") if isinstance(result.get("response"), dict) else None),
+                backend="ha",
+                agent_id=str(result.get("agent_id") or agent_id or "").strip() or None,
+                model_name=None,
+                transcript=transcript,
                 persist=bool(cfg.chat.persist_transcripts),
                 persist_days=int(cfg.retention.chat_days),
             )
@@ -831,6 +845,13 @@ def create_core_app() -> FastAPI:
             return get_store().get_chat_turn_stats(since=since)
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
+
+    @app.get("/v1/chat/transcript/{conversation_id}")
+    def chat_transcript(conversation_id: str) -> dict[str, object]:
+        snapshot = chat_memory.get_session_snapshot(conversation_id)
+        if snapshot is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation transcript not found")
+        return snapshot
 
     @app.get("/health")
     def health() -> dict[str, str]:

@@ -16,6 +16,7 @@ _MAX_RECENT_TOOLS = 6
 _MAX_GOAL_CHARS = 240
 _MAX_HYPOTHESES = 4
 _MAX_PENDING_QUESTIONS = 4
+_MAX_TRANSCRIPT_TURNS = 30
 _NODE_EUI64_RE = re.compile(r"\b([0-9a-f]{16})\b", re.IGNORECASE)
 _QUESTION_PREFIXES = (
     "what ",
@@ -87,6 +88,7 @@ class ChatSessionState:
     hypotheses: list[str] = field(default_factory=list)
     pending_questions: list[str] = field(default_factory=list)
     recent_tools: list[str] = field(default_factory=list)
+    transcript_turns: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ChatSessionStore:
@@ -153,6 +155,10 @@ class ChatSessionStore:
         page_context: dict[str, Any] | None,
         tool_calls: list[dict[str, Any]] | None,
         response_text: str | None = None,
+        backend: str | None = None,
+        agent_id: str | None = None,
+        model_name: str | None = None,
+        transcript: dict[str, Any] | None = None,
         persist: bool = True,
         persist_days: int | None = None,
     ) -> ChatSessionState:
@@ -209,9 +215,43 @@ class ChatSessionStore:
             response_text=response_text,
             tool_call_count=len(tool_calls or []),
         )
+        state.transcript_turns.insert(
+            0,
+            {
+                "recorded_at": self._to_iso(state.updated_at),
+                "backend": str(backend or "").strip() or None,
+                "agent_id": str(agent_id or "").strip() or None,
+                "model_name": str(model_name or "").strip() or None,
+                "message": message,
+                "page_context": page_context,
+                "tool_calls": tool_calls or [],
+                "response_text": response_text,
+                "transcript": transcript,
+            },
+        )
+        state.transcript_turns = state.transcript_turns[:_MAX_TRANSCRIPT_TURNS]
         if persist:
             self._persist(state, persist_days=persist_days)
         return state
+
+    def get_session_snapshot(self, conversation_id: str | None) -> dict[str, Any] | None:
+        if not conversation_id:
+            return None
+        state = self._sessions.get(str(conversation_id).strip())
+        if state is None:
+            state = self._load_persisted(str(conversation_id).strip())
+            if state is not None:
+                self._sessions[state.conversation_id] = state
+        if state is None:
+            return None
+        payload = self._serialize_state(state)
+        return {
+            "conversation_id": state.conversation_id,
+            "created_at": self._to_iso(state.created_at),
+            "updated_at": self._to_iso(state.updated_at),
+            **payload,
+            "turn_count": len(state.transcript_turns),
+        }
 
     def reset(self) -> None:
         self._sessions.clear()
@@ -427,6 +467,7 @@ class ChatSessionStore:
             "hypotheses": state.hypotheses[:_MAX_HYPOTHESES],
             "pending_questions": state.pending_questions[:_MAX_PENDING_QUESTIONS],
             "recent_tools": state.recent_tools[:_MAX_RECENT_TOOLS],
+            "transcript_turns": state.transcript_turns[:_MAX_TRANSCRIPT_TURNS],
         }
 
     def _deserialize_state(self, conversation_id: str, payload: dict[str, Any]) -> ChatSessionState:
@@ -454,6 +495,7 @@ class ChatSessionStore:
             hypotheses=[str(value) for value in (payload.get("hypotheses") or [])[:_MAX_HYPOTHESES]],
             pending_questions=[str(value) for value in (payload.get("pending_questions") or [])[:_MAX_PENDING_QUESTIONS]],
             recent_tools=[str(value) for value in (payload.get("recent_tools") or [])[:_MAX_RECENT_TOOLS]],
+            transcript_turns=[row for row in (payload.get("transcript_turns") or [])[:_MAX_TRANSCRIPT_TURNS] if isinstance(row, dict)],
         )
 
     def _to_iso(self, ts: float) -> str:
@@ -516,6 +558,10 @@ def record_turn(
     page_context: dict[str, Any] | None,
     tool_calls: list[dict[str, Any]] | None,
     response_text: str | None = None,
+    backend: str | None = None,
+    agent_id: str | None = None,
+    model_name: str | None = None,
+    transcript: dict[str, Any] | None = None,
     persist: bool = True,
     persist_days: int | None = None,
 ) -> ChatSessionState:
@@ -525,9 +571,17 @@ def record_turn(
         page_context=page_context,
         tool_calls=tool_calls,
         response_text=response_text,
+        backend=backend,
+        agent_id=agent_id,
+        model_name=model_name,
+        transcript=transcript,
         persist=persist,
         persist_days=persist_days,
     )
+
+
+def get_session_snapshot(conversation_id: str | None) -> dict[str, Any] | None:
+    return _STORE.get_session_snapshot(conversation_id)
 
 
 def reset() -> None:
