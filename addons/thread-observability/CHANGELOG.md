@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.45 — Direct-chat live follow-up
+
+This patch fixes the remaining live direct-chat failure found immediately after
+the 0.11.44 rollout.
+
+**Fixes:**
+- rewrites final answers that still leak internal tool names from gathered
+  evidence before falling back to the generic internal-tool refusal text
+- detects declarative tool-name leakage like "the evidence from get_mesh_state"
+  instead of only imperative "use/call" phrasing
+- preserves the exact-count response path where tool/result field names are
+  intentionally part of the requested output contract
+- adds regression coverage for the live chokepoint failure shape that gathered
+  evidence correctly but still surfaced the internal-tool refusal
+
 ## 0.11.44 — Direct-chat audit loop refactor
 
 This patch starts the direct-chat runtime shift from deterministic rewrite

@@ -539,6 +539,108 @@ def test_direct_chat_turn_gathers_missing_evidence_once_when_audit_requests_it(m
     assert len(calls) == 3
 
 
+def test_direct_chat_turn_repairs_internal_tool_leak_from_existing_evidence(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-mesh",
+                                    "type": "function",
+                                    "function": {"name": "get_mesh_state", "arguments": "{}"},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 2:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Use get_mesh_state and list_all_nodes to inspect the weak_link edges around Family Room Track Lights and Front Porch Lights.",
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 3:
+            retry_prompt = calls[2]["messages"][-1]
+            assert retry_prompt["role"] == "user"
+            assert "Do not tell me to use the available tools myself" in retry_prompt["content"]
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "The evidence from get_mesh_state and list_all_nodes points to the weak_link corridor around Family Room Track Lights and Front Porch Lights.",
+                        }
+                    }
+                ]
+            }
+        repair_prompt = calls[3]["messages"][-1]
+        assert repair_prompt["role"] == "system"
+        assert "Do not mention tools, MCP, functions, or backend services" in repair_prompt["content"]
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "The weakest links right now are around Family Room Track Lights and Front Porch Lights, so that corridor is the likeliest chokepoint area.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        assert name == "get_mesh_state"
+        return {
+            "data": {
+                "nodes": [{"eui64": "e6684b9903e8970f", "friendly_name": "Family Room Track Lights"}],
+                "links": [{"from": "e6684b9903e8970f", "to": "42a51d07266062b5", "tags": ["weak_link"]}],
+            },
+            "meta": {"tool": name},
+        }
+
+    async def fake_audit(*args, **kwargs):  # noqa: ANN002, ANN003
+        return direct_chat.AuditVerdict()
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+    monkeypatch.setattr(direct_chat, "_audit_answer_candidate", fake_audit)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="What are the chokepoints in my network right now?",
+            rendered_message="User message: What are the chokepoints in my network right now?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == (
+        "The weakest links right now are around Family Room Track Lights and Front Porch Lights, so that corridor is the likeliest chokepoint area."
+    )
+    assert [row["name"] for row in result["tool_calls"]] == ["get_mesh_state"]
+    assert len(calls) == 4
+
+
 def test_direct_chat_turn_retries_when_model_tells_user_to_call_internal_service(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",

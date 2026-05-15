@@ -1042,6 +1042,17 @@ def _answer_leaks_internal_tool_names(candidate_text: str) -> bool:
     return _looks_like_tool_deferral(candidate_text)
 
 
+def _answer_mentions_tool_trace_name(candidate_text: str, tool_trace: list[dict[str, Any]]) -> bool:
+    normalized = " ".join(str(candidate_text or "").lower().split())
+    if not normalized:
+        return False
+    for row in tool_trace:
+        name = str(row.get("name") or "").strip().lower()
+        if name and name in normalized:
+            return True
+    return False
+
+
 def _build_internal_tool_name_leak_response() -> str:
     return (
         "I shouldn't send you to internal MCP tools or backend function names directly. I should either use those "
@@ -1558,6 +1569,60 @@ async def _force_answer_from_existing_evidence(
     }
     payload = await _post_chat_completions(target, body)
     return _extract_message_text(payload)
+
+
+async def _repair_internal_tool_leak_from_existing_evidence(
+    target: DirectChatTarget,
+    messages: list[dict[str, Any]],
+) -> str:
+    body = {
+        "model": target.model,
+        "messages": [
+            *messages,
+            {
+                "role": "system",
+                "content": (
+                    "The prior answer leaked internal MCP tools, function names, or backend services to the operator. "
+                    "Rewrite the answer once using only the evidence already gathered in this turn. Do not mention "
+                    "tools, MCP, functions, or backend services. Answer directly in plain operator language. If the "
+                    "evidence is insufficient, say that plainly instead of punting the operator to internal tooling."
+                ),
+            },
+        ],
+        "temperature": target.temperature,
+        "stream": False,
+    }
+    payload = await _post_chat_completions(target, body)
+    return _extract_message_text(payload)
+
+
+async def _finalize_candidate_text(
+    *,
+    target: DirectChatTarget,
+    messages: list[dict[str, Any]],
+    message: str,
+    candidate_text: str,
+    tool_trace: list[dict[str, Any]],
+    history_comparison_question: bool,
+    counter_question: bool,
+    internal_tool_request: bool,
+) -> str:
+    final_candidate = candidate_text
+    if tool_trace and not internal_tool_request and not _wants_exact_count_response(message) and (
+        _answer_leaks_internal_tool_names(final_candidate)
+        or _answer_mentions_tool_trace_name(final_candidate, tool_trace)
+    ):
+        repaired = await _repair_internal_tool_leak_from_existing_evidence(target, messages)
+        if repaired:
+            final_candidate = repaired
+    return _apply_deterministic_fallbacks(
+        message=message,
+        candidate_text=final_candidate,
+        tool_trace=tool_trace,
+        history_comparison_question=history_comparison_question,
+        counter_question=counter_question,
+        internal_tool_request=internal_tool_request,
+    )
 
 
 async def _gather_backend_history_comparison_evidence(
@@ -2131,7 +2196,9 @@ async def direct_chat_turn(
             final_text = await _force_answer_from_existing_evidence(target, messages)
         if not final_text:
             final_text = "I couldn't complete the tool-assisted reasoning loop. Please retry with a narrower request."
-    final_text = _apply_deterministic_fallbacks(
+    final_text = await _finalize_candidate_text(
+        target=target,
+        messages=messages,
         message=context_message,
         candidate_text=final_text,
         tool_trace=tool_trace,
