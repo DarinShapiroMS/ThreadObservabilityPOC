@@ -176,27 +176,6 @@ def _coerce_audit_verdict(review: AuditVerdict | AnswerReview | Any) -> AuditVer
     return AuditVerdict()
 
 
-def _tool_deferral_retry_budget(target: DirectChatTarget) -> int:
-    provider = str(target.provider or "").strip().lower()
-    model = str(target.model or "").strip().lower()
-    if provider == "cerebras" and ("llama3.1-8b" in model or "llama-3.1-8b" in model or "8b" in model):
-        return 2
-    return _MAX_TOOL_DEFERRAL_RETRIES
-
-
-def _tool_deferral_retry_message(attempt: int) -> str:
-    if attempt <= 1:
-        return (
-            "Do not tell me to use the available tools myself. Call the relevant tools now, then answer from the "
-            "observed results."
-        )
-    return (
-        "Do not ask me to call internal MCP tools, functions, or data services. You must either call the relevant "
-        "tools yourself now or answer explicitly that the currently available evidence is insufficient. Do not punt "
-        "tool use back to the user."
-    )
-
-
 def _default_evaluator_model(target: DirectChatTarget) -> str:
     provider = _normalize_provider(target.provider)
     override = str(os.getenv("THREAD_OBS_AI_EVALUATOR_MODEL", "")).strip()
@@ -405,87 +384,6 @@ def _extract_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def _looks_like_tool_deferral(text: str) -> bool:
-    normalized = " ".join(str(text or "").lower().split())
-    if not normalized:
-        return False
-    patterns = (
-        "you can use the",
-        "you can use",
-        "you can call the",
-        "you can call",
-        "you can query the",
-        "you can check the",
-        "we would need to call",
-        "i would need to call",
-        "use the \"",
-        "use the get_",
-        "to investigate further, you can use",
-        "to proceed, i would like to know",
-        "to proceed, i would need to know",
-        "it's also a good idea to check",
-        "you should use the",
-        "i recommend analyzing",
-        "i recommend calling",
-        "i would recommend analyzing",
-        "i would recommend calling",
-        "call the \"",
-        "calling the \"",
-    )
-    if any(pattern in normalized for pattern in patterns):
-        return True
-    if any(
-        phrase in normalized
-        for phrase in (
-            " tool ",
-            " tool.",
-            " function ",
-            " function.",
-            " data service",
-            " mcp service",
-        )
-    ):
-        return True
-    return any(
-        tool_name in normalized
-        for tool_name in (
-            "get_mesh_state",
-            "analyze_node",
-            "get_counter_series",
-            "query_history",
-            "get_topology_history_entry",
-            "list_topology_history",
-            "get_node_history",
-        )
-    )
-
-
-def _answer_requests_user_node_selection(candidate_text: str) -> bool:
-    normalized = " ".join(str(candidate_text or "").lower().split())
-    if not normalized:
-        return False
-    return any(
-        phrase in normalized
-        for phrase in (
-            "please provide the eui64",
-            "provide the eui64 of the node",
-            "provide the node's eui64",
-            "please provide the node's eui64",
-            "which node you would like to investigate",
-            "i would need to know which node",
-            "need to know which node",
-            "selected eui64",
-            "selected node eui64",
-            "selected node",
-            "none of them have a selected eui64",
-            "select one of the nodes",
-            "please select a node",
-            "select a node from the dashboard",
-            "provide the eui64 of the node you are interested in",
-        )
-    )
-
-
 def _looks_like_node_question(text: str) -> bool:
     normalized = " ".join(str(text or "").lower().split())
     if not normalized:
@@ -506,61 +404,11 @@ def _looks_like_offline_nodes_question(text: str) -> bool:
     return "offline node" in normalized or "offline nodes" in normalized
 
 
-def _looks_like_overall_health_question(text: str) -> bool:
-    normalized = " ".join(str(text or "").lower().split())
-    if not normalized:
-        return False
-    return any(
-        marker in normalized
-        for marker in (
-            "overall health of my network",
-            "overall health of the network",
-            "health of my network right now",
-            "how healthy is my network",
-            "is my network healthy",
-        )
-    )
-
-
-def _looks_like_partition_summary_question(text: str) -> bool:
-    normalized = " ".join(str(text or "").lower().split())
-    if not normalized:
-        return False
-    if not any(marker in normalized for marker in ("partition", "thread network", "thread networks", "unified mesh")):
-        return False
-    return any(
-        marker in normalized
-        for marker in (
-            "why are there two partitions",
-            "how many partitions",
-            "partition status",
-            "partitions right now",
-            "single unified",
-            "one partition",
-            "unified thread network",
-            "distinct thread networks",
-            "two networks",
-            "network split",
-        )
-    )
-
-
-def _should_apply_page_context_contradiction_guard(text: str) -> bool:
-    return (
-        _looks_like_offline_nodes_question(text)
-        or _looks_like_overall_health_question(text)
-        or _looks_like_partition_summary_question(text)
-    )
-
-
 def _looks_like_history_comparison_question(text: str) -> bool:
     normalized = " ".join(str(text or "").lower().split())
     if not normalized:
         return False
     comparison_markers = (
-        "24h ago",
-        "24 hours ago",
-        "yesterday",
         "compare",
         "comparison",
         "now and",
@@ -598,7 +446,6 @@ def _looks_like_chokepoint_question(text: str) -> bool:
     if not normalized:
         return False
     return any(marker in normalized for marker in ("chokepoint", "chokepoints", "bottleneck", "bottlenecks"))
-
 
 def _looks_like_internal_tool_request(text: str) -> bool:
     normalized = " ".join(str(text or "").lower().split())
@@ -645,69 +492,6 @@ def _is_valid_eui64(value: Any) -> bool:
     return bool(_STRICT_EUI64_RE.fullmatch(str(value or "").strip()))
 
 
-def _result_contains_channel_evidence(value: Any, *, _depth: int = 0) -> bool:
-    if _depth > 5:
-        return False
-    if isinstance(value, dict):
-        for key, inner in value.items():
-            if str(key).strip().lower() == "channel" and inner not in (None, ""):
-                return True
-            if _result_contains_channel_evidence(inner, _depth=_depth + 1):
-                return True
-        return False
-    if isinstance(value, list):
-        return any(_result_contains_channel_evidence(inner, _depth=_depth + 1) for inner in value)
-    return False
-
-
-def _tool_trace_contains_channel_evidence(tool_trace: list[dict[str, Any]]) -> bool:
-    return any(_result_contains_channel_evidence(_tool_result_data(row.get("result"))) for row in tool_trace)
-
-
-def _history_answer_overclaims_channel_change(message: str, candidate_text: str, tool_trace: list[dict[str, Any]]) -> bool:
-    normalized_message = " ".join(str(message or "").lower().split())
-    normalized_answer = " ".join(str(candidate_text or "").lower().split())
-    if "channel" not in normalized_message:
-        return False
-    channel_claim_markers = (
-        "channel has changed",
-        "channel changed",
-        "current channel is different",
-        "channel did not change",
-        "channel has not changed",
-        "same channel",
-    )
-    if not any(marker in normalized_answer for marker in channel_claim_markers):
-        return False
-    return not _tool_trace_contains_channel_evidence(tool_trace)
-
-
-def _build_history_insufficient_response(tool_trace: list[dict[str, Any]]) -> str:
-    diff_row = next((row for row in reversed(tool_trace) if str(row.get("name") or "") == "diff_topology_history"), None)
-    if diff_row is None:
-        return (
-            "I don't have channel-specific history for the retained comparison anchors, so I can't determine whether "
-            "the Thread channel changed in that window."
-        )
-    diff = _tool_result_data(diff_row.get("result"))
-    diff = diff if isinstance(diff, dict) else {}
-    summary = diff.get("summary") if isinstance(diff.get("summary"), dict) else {}
-    added_nodes = int(summary.get("added_node_count") or len(diff.get("added_nodes") or []))
-    removed_nodes = int(summary.get("removed_node_count") or len(diff.get("removed_nodes") or []))
-    changed_nodes = int(summary.get("changed_node_count") or len(diff.get("changed_nodes") or []))
-    if added_nodes or removed_nodes or changed_nodes:
-        return (
-            "I can see retained topology changes between the comparison snapshots "
-            f"({added_nodes} added nodes, {removed_nodes} removed nodes, {changed_nodes} changed nodes), "
-            "but I don't have channel-specific history for those anchors, so I can't determine whether the Thread "
-            "channel changed."
-        )
-    return (
-        "I can compare the retained topology snapshots, but they do not include channel-specific history, so I can't "
-        "determine whether the Thread channel changed."
-    )
-
-
 def _parse_iso8601(value: Any) -> datetime | None:
     text = str(value or "").strip()
     if not text:
@@ -726,38 +510,6 @@ def _extract_snapshot_summaries(result: Any) -> list[dict[str, Any]]:
     if isinstance(data, list):
         return [row for row in data if isinstance(row, dict)]
     return []
-
-
-def _history_snapshot_refs(tool_trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    refs: list[dict[str, Any]] = []
-    for row in tool_trace:
-        if str(row.get("name") or "") != "get_topology_history_entry":
-            continue
-        arguments = row.get("arguments") if isinstance(row.get("arguments"), dict) else {}
-        for snapshot in _extract_snapshot_summaries(row.get("result")):
-            refs.append(
-                {
-                    "id": snapshot.get("id") or snapshot.get("snapshot_id"),
-                    "captured_at": snapshot.get("captured_at") or snapshot.get("ts"),
-                    "arguments": arguments,
-                }
-            )
-    return refs
-
-
-def _history_comparison_is_unreliable(message: str, tool_trace: list[dict[str, Any]]) -> bool:
-    if not _looks_like_history_comparison_question(message):
-        return False
-    if not any(str(row.get("name") or "") == "list_topology_history" for row in tool_trace):
-        return True
-    refs = _history_snapshot_refs(tool_trace)
-    if len(refs) < 2:
-        return True
-    ids = {int(ref["id"]) for ref in refs if isinstance(ref.get("id"), int)}
-    if len(ids) >= 2:
-        return False
-    captured = {str(ref.get("captured_at") or "") for ref in refs if ref.get("captured_at")}
-    return len(captured) < 2
 
 
 def _compact_topology_diff(result: dict[str, Any]) -> dict[str, Any]:
@@ -790,497 +542,6 @@ def _compact_node_inventory(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _extract_known_node_ids(tool_trace: list[dict[str, Any]]) -> set[str]:
-    known: set[str] = set()
-    for row in tool_trace:
-        name = str(row.get("name") or "")
-        arguments = row.get("arguments") if isinstance(row.get("arguments"), dict) else {}
-        if name in {"analyze_node", "get_counter_series"}:
-            eui64 = str(arguments.get("eui64") or "").strip().lower()
-            if eui64:
-                known.add(eui64)
-        if name == "compare_node_counters":
-            for key in ("eui64_a", "eui64_b"):
-                eui64 = str(arguments.get(key) or "").strip().lower()
-                if eui64:
-                    known.add(eui64)
-        data = _tool_result_data(row.get("result"))
-        if isinstance(data, dict):
-            eui64 = str(data.get("eui64") or "").strip().lower()
-            if eui64:
-                known.add(eui64)
-            nodes = data.get("nodes")
-            if isinstance(nodes, list):
-                for node in nodes:
-                    if isinstance(node, dict):
-                        eui64 = str(node.get("eui64") or "").strip().lower()
-                        if eui64:
-                            known.add(eui64)
-            for key in ("a", "b"):
-                side = data.get(key)
-                if isinstance(side, dict):
-                    eui64 = str(side.get("eui64") or "").strip().lower()
-                    if eui64:
-                        known.add(eui64)
-    return known
-
-
-def _response_references_unknown_node(text: str, tool_trace: list[dict[str, Any]]) -> bool:
-    refs = {match.group(1).lower() for match in _POTENTIAL_NODE_ID_RE.finditer(str(text or ""))}
-    if not refs:
-        return False
-    known = _extract_known_node_ids(tool_trace)
-    if not known:
-        return False
-    return any(ref not in known for ref in refs)
-
-
-def _counter_tool_arguments_are_invalid(tool_trace: list[dict[str, Any]]) -> bool:
-    for row in tool_trace:
-        name = str(row.get("name") or "")
-        arguments = row.get("arguments") if isinstance(row.get("arguments"), dict) else {}
-        if name in {"get_counter_series", "analyze_node"}:
-            eui64 = arguments.get("eui64")
-            if not _is_valid_eui64(eui64):
-                return True
-        if name == "compare_node_counters":
-            for key in ("eui64_a", "eui64_b"):
-                eui64 = arguments.get(key)
-                if not _is_valid_eui64(eui64):
-                    return True
-    return False
-
-
-def _counter_evidence_is_empty(tool_trace: list[dict[str, Any]]) -> bool:
-    saw_counter_tool = False
-    for row in tool_trace:
-        name = str(row.get("name") or "")
-        data = _tool_result_data(row.get("result"))
-        if name == "get_counter_series" and isinstance(data, dict):
-            saw_counter_tool = True
-            if not isinstance(data.get("series"), list) or len(data.get("series") or []) == 0:
-                return True
-        if name == "compare_node_counters" and isinstance(data, dict):
-            saw_counter_tool = True
-            a_series = data.get("a") if isinstance(data.get("a"), dict) else {}
-            b_series = data.get("b") if isinstance(data.get("b"), dict) else {}
-            if not (a_series.get("series") or b_series.get("series")):
-                return True
-    return saw_counter_tool and False
-
-
-def _counter_answer_mentions_unsupported_evidence(candidate_text: str) -> bool:
-    normalized = " ".join(str(candidate_text or "").lower().split())
-    if not normalized:
-        return False
-    return any(
-        phrase in normalized
-        for phrase in (
-            "configuration history",
-            "config history",
-            "reset history",
-            "node's configuration",
-            "nodes configuration",
-            "node that changed channels",
-            '"channel_change" counter',
-            "get_node_history",
-        )
-    )
-
-
-def _counter_answer_is_unreliable(candidate_text: str, tool_trace: list[dict[str, Any]]) -> bool:
-    return (
-        _counter_tool_arguments_are_invalid(tool_trace)
-        or _counter_evidence_is_empty(tool_trace)
-        or _response_references_unknown_node(candidate_text, tool_trace)
-        or _answer_requests_user_node_selection(candidate_text)
-        or _counter_answer_mentions_unsupported_evidence(candidate_text)
-    )
-
-
-def _build_counter_insufficient_response(tool_trace: list[dict[str, Any]]) -> str:
-    reasons: list[str] = []
-    if _counter_tool_arguments_are_invalid(tool_trace):
-        reasons.append("the counter query was not grounded to a real 16-hex EUI64 from the mesh inventory")
-    if _counter_evidence_is_empty(tool_trace):
-        reasons.append("the returned counter series was empty")
-    if not reasons:
-        reasons.append("the available counter evidence is insufficient")
-    return (
-        "I can't determine whether RF conditions caused the channel change from the available evidence because "
-        + " and ".join(reasons)
-        + "."
-    )
-
-
-def _build_internal_tool_refusal_response(message: str, tool_trace: list[dict[str, Any]]) -> str:
-    prefix = "I can't ask you to call internal MCP tools directly. "
-    if _looks_like_counter_or_rf_question(message):
-        return prefix + _build_counter_insufficient_response(tool_trace)
-    return prefix + "The available evidence is insufficient to answer that from the current turn."
-
-
-def _internal_tool_answer_needs_refusal(message: str, candidate_text: str, tool_trace: list[dict[str, Any]]) -> bool:
-    normalized = " ".join(str(candidate_text or "").lower().split())
-    if _looks_like_tool_deferral(candidate_text) or _counter_answer_mentions_unsupported_evidence(candidate_text):
-        return True
-    if _looks_like_counter_or_rf_question(message) and (
-        _counter_tool_arguments_are_invalid(tool_trace) or _counter_evidence_is_empty(tool_trace)
-    ):
-        return True
-    return any(
-        phrase in normalized
-        for phrase in (
-            "please provide the friendly name",
-            "please provide the eui64",
-            "please provide the node's eui64",
-            "provide the eui64 of the node",
-            "which node you would like to investigate",
-            "selected node",
-            "selected eui64",
-            "selected node eui64",
-            "none of them have a selected eui64",
-            "select one of the nodes",
-            "please select a node",
-            "select a node from the dashboard",
-            "i need to know which node",
-            "i would need to know which node",
-            "i do not have any information about which node",
-            "i don't have any information about which node",
-            "i do not have any information about the node",
-            "i don't have any information about the node",
-        )
-    )
-
-
-def _apply_deterministic_fallbacks(
-    *,
-    message: str,
-    candidate_text: str,
-    tool_trace: list[dict[str, Any]],
-    history_comparison_question: bool,
-    counter_question: bool,
-    internal_tool_request: bool,
-) -> str:
-    if history_comparison_question and (
-        _history_comparison_is_unreliable(message, tool_trace)
-        or _history_answer_overclaims_channel_change(message, candidate_text, tool_trace)
-    ):
-        return _build_history_insufficient_response(tool_trace)
-    if _answer_mentions_unsupported_dashboard_action(candidate_text):
-        return _build_unsupported_dashboard_action_response(message, candidate_text)
-    if _should_apply_page_context_contradiction_guard(message) and _answer_contradicts_page_context(message, candidate_text):
-        return _build_page_context_contradiction_response(message)
-    if _answer_leaks_internal_tool_names(candidate_text):
-        return _build_internal_tool_name_leak_response()
-    if internal_tool_request and _internal_tool_answer_needs_refusal(message, candidate_text, tool_trace):
-        return _build_internal_tool_refusal_response(message, tool_trace)
-    if counter_question and _counter_answer_is_unreliable(candidate_text, tool_trace):
-        return _build_counter_insufficient_response(tool_trace)
-    return candidate_text
-
-
-def _answer_mentions_unsupported_dashboard_action(candidate_text: str) -> bool:
-    normalized = str(candidate_text or "").strip()
-    if not normalized:
-        return False
-    return any(pattern.search(normalized) for pattern in _UNSUPPORTED_DASHBOARD_ACTION_PATTERNS)
-
-
-def _build_unsupported_dashboard_action_response(message: str, candidate_text: str) -> str:
-    normalized = str(candidate_text or "")
-    blocked: list[str] = []
-    graph_detail_blocked = False
-    if re.search(r"\bset\s+otbr\s+slug\b", normalized, re.IGNORECASE):
-        blocked.append("set the OTBR slug")
-    if re.search(r"\brestart\s+pipeline\b", normalized, re.IGNORECASE):
-        blocked.append("restart the pipeline")
-    if re.search(r"\btoggl(?:e|ed)\b.*\bcurrent\b.*\bhistorical\b.*\bview", normalized, re.IGNORECASE) or re.search(
-        r"\bcurrent\s+and\s+historical\s+views\b", normalized, re.IGNORECASE
-    ):
-        blocked.append("toggle between current and historical partition views")
-    if re.search(r"\bwarning\s+icon\b.*\bgraph\s+diagnostics\b", normalized, re.IGNORECASE):
-        blocked.append("click a warning icon in graph diagnostics")
-        graph_detail_blocked = True
-    if re.search(r"\bgraph\s+diagnostics\W*(?:panel|view)\b", normalized, re.IGNORECASE):
-        blocked.append("open a graph diagnostics panel")
-        graph_detail_blocked = True
-    if re.search(r"\bweak\s+links?\s+(?:view|panel|details?)\b", normalized, re.IGNORECASE):
-        blocked.append("open a weak-links detail view")
-        graph_detail_blocked = True
-    if re.search(r"\bhover\b.*\bhighlighted\s+edge\b", normalized, re.IGNORECASE) or re.search(
-        r"\bhover\b.*\bedge\b.*\blink[-\s]?quality\s+metrics\b", normalized, re.IGNORECASE
-    ):
-        blocked.append("hover over highlighted edges for hidden link metrics")
-        graph_detail_blocked = True
-    if re.search(r"\bweak[_\s-]?link\s+flag\s+clears?\b", normalized, re.IGNORECASE):
-        blocked.append("wait for a weak-link flag to clear from a diagnostics panel")
-        graph_detail_blocked = True
-    if re.search(r"\bdiagnostics\s+panel\b.*\bweak[_\s-]?link\b", normalized, re.IGNORECASE):
-        blocked.append("inspect weak-link diagnostics in a hidden panel")
-        graph_detail_blocked = True
-    if _looks_like_chokepoint_question(message) and (
-        graph_detail_blocked
-        or re.search(r"\bgraph\s+diagnostics\b", normalized, re.IGNORECASE)
-        or re.search(r"\bweak[_\s-]?link\b", normalized, re.IGNORECASE)
-        or re.search(r"\bhigh[_\s-]?error\b", normalized, re.IGNORECASE)
-    ):
-        return (
-            "The current evidence suggests weak-link or high-error edges are the most likely chokepoints, but the gathered "
-            "backend evidence in this turn does not name the exact node pairs. So I can say the chokepoints are in the "
-            "weak-link set, but I cannot identify the specific edge endpoints without inventing evidence that is not present."
-        )
-    if _looks_like_partition_summary_question(message):
-        page_context = _extract_page_context_from_message(message) or {}
-        summary = page_context.get("snapshot_summary") if isinstance(page_context, dict) else {}
-        summary = summary if isinstance(summary, dict) else {}
-        try:
-            partition_count = int(summary.get("partition_count") or 0)
-        except (TypeError, ValueError):
-            partition_count = 0
-        try:
-            distinct_thread_networks = int(summary.get("distinct_thread_networks") or 0)
-        except (TypeError, ValueError):
-            distinct_thread_networks = 0
-        if partition_count > 0 or distinct_thread_networks > 0:
-            if partition_count <= 1 and distinct_thread_networks > 1:
-                return (
-                    "The current evidence does not show two active partitions. It shows 1 partition but "
-                    f"{distinct_thread_networks} distinct Thread networks. That usually points to stale registrations, "
-                    "duplicate commissioning, or mismatched device metadata rather than a live mesh split."
-                )
-            return (
-                f"The current evidence shows {partition_count} partition{'s' if partition_count != 1 else ''} and "
-                f"{distinct_thread_networks} distinct Thread network{'s' if distinct_thread_networks != 1 else ''}. "
-                "So the right interpretation is the current topology state, not the invented operator action."
-            )
-    actions = ", ".join(blocked) if blocked else "use that dashboard action"
-    return (
-        "That recommendation depends on an operator action that is not supported by the evidence gathered in this turn: "
-        f"{actions}. I can still diagnose the issue from available Thread evidence and describe any required manual "
-        "action in plain backend terms instead of referring to a nonexistent interface step."
-    )
-
-
-def _answer_leaks_internal_tool_names(candidate_text: str) -> bool:
-    normalized = " ".join(str(candidate_text or "").lower().split())
-    if not normalized:
-        return False
-    if not any(
-        phrase in normalized
-        for phrase in (
-            "use ",
-            "call ",
-            "query ",
-            "check ",
-            "recommend ",
-            "investigate further",
-            "tool ",
-            "function ",
-            "mcp ",
-        )
-    ):
-        return False
-    return _looks_like_tool_deferral(candidate_text)
-
-
-def _answer_mentions_tool_trace_name(candidate_text: str, tool_trace: list[dict[str, Any]]) -> bool:
-    normalized = " ".join(str(candidate_text or "").lower().split())
-    if not normalized:
-        return False
-    for row in tool_trace:
-        name = str(row.get("name") or "").strip().lower()
-        if name and name in normalized:
-            return True
-    return False
-
-
-def _build_internal_tool_name_leak_response() -> str:
-    return (
-        "I shouldn't send you to internal MCP tools or backend function names directly. I should either use those "
-        "tools myself and answer from the evidence, or describe the next diagnostic step in plain operator terms."
-    )
-
-
-def _extract_page_context_from_message(message: str) -> dict[str, Any] | None:
-    match = re.search(r"(?:^|\n)Page context:\s*(\{.*\})", str(message or ""))
-    if not match:
-        return None
-    try:
-        parsed = json.loads(match.group(1))
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
-def _extract_named_count(candidate_text: str, *labels: str) -> int | None:
-    normalized = " ".join(str(candidate_text or "").lower().split())
-    if not normalized:
-        return None
-    for label in labels:
-        pattern = re.compile(rf"\b{re.escape(label)}\b[^0-9]{{0,24}}(\d+)\b", re.IGNORECASE)
-        match = pattern.search(normalized)
-        if match:
-            try:
-                return int(match.group(1))
-            except (TypeError, ValueError):
-                continue
-    return None
-
-
-def _answer_contradicts_page_context(message: str, candidate_text: str) -> bool:
-    page_context = _extract_page_context_from_message(message)
-    if not page_context:
-        return False
-    summary = page_context.get("snapshot_summary")
-    if not isinstance(summary, dict):
-        return False
-    normalized = str(candidate_text or "").strip()
-    if not normalized:
-        return False
-    try:
-        partition_count = int(summary.get("partition_count") or 0)
-    except (TypeError, ValueError):
-        partition_count = 0
-    try:
-        distinct_thread_networks = int(summary.get("distinct_thread_networks") or 0)
-    except (TypeError, ValueError):
-        distinct_thread_networks = 0
-    try:
-        total_nodes = int(summary.get("total_nodes") or 0)
-    except (TypeError, ValueError):
-        total_nodes = 0
-    try:
-        stale_nodes = int(summary.get("stale_nodes") or 0)
-    except (TypeError, ValueError):
-        stale_nodes = 0
-    try:
-        offline_nodes = int(summary.get("offline_nodes") or 0)
-    except (TypeError, ValueError):
-        offline_nodes = 0
-    try:
-        online_nodes = int(summary.get("online_nodes") or 0)
-    except (TypeError, ValueError):
-        online_nodes = 0
-    if partition_count > 1 and any(pattern.search(normalized) for pattern in _PAGE_CONTEXT_SINGLE_PARTITION_PATTERNS):
-        return True
-    if distinct_thread_networks > 1 and any(pattern.search(normalized) for pattern in _PAGE_CONTEXT_UNIFIED_NETWORK_PATTERNS):
-        return True
-    if offline_nodes > 0 and any(pattern.search(normalized) for pattern in _PAGE_CONTEXT_NO_OFFLINE_PATTERNS):
-        return True
-    if stale_nodes > 0 and any(pattern.search(normalized) for pattern in _PAGE_CONTEXT_NO_STALE_PATTERNS):
-        return True
-    claimed_total = _extract_named_count(normalized, "total nodes", "nodes total")
-    if total_nodes > 0 and claimed_total is not None and claimed_total != total_nodes:
-        return True
-    claimed_offline = _extract_named_count(normalized, "offline nodes", "offline devices", "offline")
-    if offline_nodes >= 0 and claimed_offline is not None and claimed_offline != offline_nodes:
-        return True
-    claimed_online = _extract_named_count(normalized, "online nodes", "healthy nodes", "online")
-    if online_nodes > 0 and claimed_online is not None and claimed_online != online_nodes:
-        return True
-    claimed_stale = _extract_named_count(normalized, "stale nodes", "stale")
-    if stale_nodes >= 0 and claimed_stale is not None and claimed_stale != stale_nodes:
-        return True
-    return False
-
-
-def _build_page_context_contradiction_response(message: str) -> str:
-    page_context = _extract_page_context_from_message(message) or {}
-    summary = page_context.get("snapshot_summary") if isinstance(page_context, dict) else {}
-    summary = summary if isinstance(summary, dict) else {}
-    visible_offline_nodes = page_context.get("visible_offline_nodes") if isinstance(page_context, dict) else []
-    visible_offline_nodes = visible_offline_nodes if isinstance(visible_offline_nodes, list) else []
-    try:
-        partition_count = int(summary.get("partition_count") or 0)
-    except (TypeError, ValueError):
-        partition_count = 0
-    try:
-        distinct_thread_networks = int(summary.get("distinct_thread_networks") or 0)
-    except (TypeError, ValueError):
-        distinct_thread_networks = 0
-    try:
-        total_nodes = int(summary.get("total_nodes") or 0)
-    except (TypeError, ValueError):
-        total_nodes = 0
-    try:
-        online_nodes = int(summary.get("online_nodes") or 0)
-    except (TypeError, ValueError):
-        online_nodes = 0
-    try:
-        offline_nodes = int(summary.get("offline_nodes") or 0)
-    except (TypeError, ValueError):
-        offline_nodes = 0
-    try:
-        stale_nodes = int(summary.get("stale_nodes") or 0)
-    except (TypeError, ValueError):
-        stale_nodes = 0
-    try:
-        active_issue_count = int(summary.get("active_issue_count") or 0)
-    except (TypeError, ValueError):
-        active_issue_count = 0
-
-    if _looks_like_offline_nodes_question(message):
-        if visible_offline_nodes:
-            names = []
-            for row in visible_offline_nodes[:3]:
-                if not isinstance(row, dict):
-                    continue
-                name = str(row.get("friendly_name") or row.get("name") or row.get("eui64") or "").strip()
-                if name:
-                    names.append(name)
-            listed = ", ".join(names) if names else "the visible offline node"
-            return (
-                f"The dashboard currently shows {offline_nodes} offline node{'s' if offline_nodes != 1 else ''} out of "
-                f"{total_nodes or (online_nodes + offline_nodes)} total. The offline node to investigate first is {listed}. "
-                "I am not trusting the contradictory backend summary that claimed there were no offline nodes, because it "
-                "does not match the live UI context for this turn."
-            )
-        return (
-            f"The dashboard currently shows {offline_nodes} offline node{'s' if offline_nodes != 1 else ''} out of "
-            f"{total_nodes or (online_nodes + offline_nodes)} total, so I should not claim there are none. The live UI and "
-            "the gathered backend evidence disagree, and the visible offline node count should win for this turn."
-        )
-
-    if _looks_like_overall_health_question(message):
-        health_label = "mixed" if (offline_nodes > 0 or distinct_thread_networks > 1 or active_issue_count > 0) else "good"
-        concerns: list[str] = []
-        if offline_nodes > 0:
-            concerns.append(f"{offline_nodes} offline node{'s' if offline_nodes != 1 else ''}")
-        if distinct_thread_networks > 1:
-            concerns.append(f"{distinct_thread_networks} distinct Thread networks")
-        if stale_nodes > 0:
-            concerns.append(f"{stale_nodes} stale node{'s' if stale_nodes != 1 else ''}")
-        if active_issue_count > 0:
-            concerns.append(f"{active_issue_count} active issue{'s' if active_issue_count != 1 else ''}")
-        concern_text = ", ".join(concerns) if concerns else "no immediate health alarms"
-        return (
-            f"Overall health looks {health_label}, not fully clean. The live dashboard currently shows {online_nodes} online / "
-            f"{offline_nodes} offline of {total_nodes or (online_nodes + offline_nodes)}, {partition_count} partition"
-            f"{'s' if partition_count != 1 else ''}, and {distinct_thread_networks} distinct Thread network"
-            f"{'s' if distinct_thread_networks != 1 else ''}. The main concerns right now are {concern_text}. I am using "
-            "the live page context here because the gathered backend summary contradicted those visible counts."
-        )
-
-    details = []
-    if total_nodes > 0:
-        details.append(f"{total_nodes} total node{'s' if total_nodes != 1 else ''}")
-    if online_nodes > 0 or offline_nodes > 0:
-        details.append(f"{online_nodes} online / {offline_nodes} offline")
-    if stale_nodes > 0:
-        details.append(f"{stale_nodes} stale node{'s' if stale_nodes != 1 else ''}")
-    if partition_count > 0:
-        details.append(f"{partition_count} partition{'s' if partition_count != 1 else ''}")
-    if distinct_thread_networks > 0:
-        details.append(f"{distinct_thread_networks} distinct Thread network{'s' if distinct_thread_networks != 1 else ''}")
-    details_text = ", ".join(details) if details else "a conflicting dashboard state"
-    return (
-        "I can't flatten this into a single unified mesh because the current dashboard page context already shows "
-        f"{details_text}. The safer conclusion is that the visible UI and the gathered evidence disagree, so this should be "
-        "treated as an active discrepancy to investigate rather than claiming there is only one partition."
-    )
-
-
 def _validate_chat_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
     if name in {"get_counter_series", "analyze_node"}:
         eui64 = arguments.get("eui64")
@@ -1306,6 +567,7 @@ def _answer_review_policies(
         "Do not tell the user to call internal MCP tools, functions, or backend services themselves.",
         "Do not reason from UI controls, page state, or display labels. Use backend evidence only.",
         "Do not translate missing evidence into interface advice or invented operator workflows.",
+        "Do not answer with self-referential meta commentary about what you should or should not do; answer the user's question directly from evidence.",
     ]
     if internal_tool_request:
         policies.append("For internal-tool questions, either answer from gathered evidence or refuse clearly; never punt internal tool usage back to the user.")
@@ -1611,60 +873,6 @@ async def _force_answer_from_existing_evidence(
     }
     payload = await _post_chat_completions(target, body)
     return _extract_message_text(payload)
-
-
-async def _repair_internal_tool_leak_from_existing_evidence(
-    target: DirectChatTarget,
-    messages: list[dict[str, Any]],
-) -> str:
-    body = {
-        "model": target.model,
-        "messages": [
-            *messages,
-            {
-                "role": "system",
-                "content": (
-                    "The prior answer leaked internal MCP tools, function names, or backend services to the operator. "
-                    "Rewrite the answer once using only the evidence already gathered in this turn. Do not mention "
-                    "tools, MCP, functions, or backend services. Answer directly in plain operator language. If the "
-                    "evidence is insufficient, say that plainly instead of punting the operator to internal tooling."
-                ),
-            },
-        ],
-        "temperature": target.temperature,
-        "stream": False,
-    }
-    payload = await _post_chat_completions(target, body)
-    return _extract_message_text(payload)
-
-
-async def _finalize_candidate_text(
-    *,
-    target: DirectChatTarget,
-    messages: list[dict[str, Any]],
-    message: str,
-    candidate_text: str,
-    tool_trace: list[dict[str, Any]],
-    history_comparison_question: bool,
-    counter_question: bool,
-    internal_tool_request: bool,
-) -> str:
-    final_candidate = candidate_text
-    if tool_trace and not internal_tool_request and not _wants_exact_count_response(message) and (
-        _answer_leaks_internal_tool_names(final_candidate)
-        or _answer_mentions_tool_trace_name(final_candidate, tool_trace)
-    ):
-        repaired = await _repair_internal_tool_leak_from_existing_evidence(target, messages)
-        if repaired:
-            final_candidate = repaired
-    return _apply_deterministic_fallbacks(
-        message=message,
-        candidate_text=final_candidate,
-        tool_trace=tool_trace,
-        history_comparison_question=history_comparison_question,
-        counter_question=counter_question,
-        internal_tool_request=internal_tool_request,
-    )
 
 
 async def _gather_backend_history_comparison_evidence(
@@ -2032,7 +1240,6 @@ async def direct_chat_turn(
 ) -> dict[str, Any]:
     started = time.perf_counter()
     context_message = rendered_message or message
-    tool_deferral_retry_budget = _tool_deferral_retry_budget(target)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _DEFAULT_SYSTEM_PROMPT},
         {"role": "user", "content": context_message},
@@ -2040,12 +1247,8 @@ async def direct_chat_turn(
     tools = _chat_tools()
     tool_trace: list[dict[str, Any]] = []
     tool_calls_used = 0
-    tool_deferral_retries = 0
     audit_rewrite_retries = 0
     audit_evidence_retries = 0
-    node_evidence_retries = 0
-    history_comparison_retries = 0
-    counter_grounding_retries = 0
     topology_history_empty_hints = 0
     final_text = ""
     node_question = _looks_like_node_question(message)
@@ -2075,78 +1278,6 @@ async def direct_chat_turn(
         )
         if not tool_calls:
             candidate_text = _extract_message_text(payload)
-            if tool_deferral_retries < tool_deferral_retry_budget and _looks_like_tool_deferral(candidate_text):
-                tool_deferral_retries += 1
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": _tool_deferral_retry_message(tool_deferral_retries),
-                    }
-                )
-                continue
-            if (
-                history_comparison_question
-                and history_comparison_retries < _MAX_HISTORY_COMPARISON_RETRIES
-                and _history_comparison_is_unreliable(message, tool_trace)
-            ):
-                history_comparison_retries += 1
-                evidence = await _gather_backend_history_comparison_evidence(tool_trace)
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": (
-                            "This question compares current state with an older retained topology snapshot. Use the "
-                            "authoritative backend evidence below before answering. Do not invent snapshot timestamps, "
-                            "and do not treat the same snapshot as both the current and historical anchor. If there is "
-                            "no distinct older snapshot, say the retained history is insufficient for that comparison. "
-                            "If the question asks about channel changes, do not claim a channel change unless the gathered "
-                            "evidence includes channel-specific data. A topology diff alone does not prove a channel change.\n\n"
-                            + _serialize_for_prompt(evidence, max_chars=_MAX_EVIDENCE_MESSAGE_CHARS)
-                        ),
-                    }
-                )
-                continue
-            if (
-                counter_question
-                and counter_grounding_retries < _MAX_COUNTER_GROUNDING_RETRIES
-                and _counter_answer_is_unreliable(candidate_text, tool_trace)
-            ):
-                counter_grounding_retries += 1
-                evidence = await _gather_backend_counter_grounding_evidence(tool_trace)
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": (
-                            "Counter-based answers must stay grounded in real nodes from the current mesh inventory. Do not "
-                            "invent node IDs, do not use placeholder EUI64 values, and do not infer RF or channel-root-cause "
-                            "conclusions from empty counter series. Do not recommend config-history or reset-history evidence "
-                            "unless that evidence was actually gathered in this turn. "
-                            "Use only the current mesh inventory below, or answer that the evidence is insufficient.\n\n"
-                            + _serialize_for_prompt(evidence, max_chars=_MAX_EVIDENCE_MESSAGE_CHARS)
-                        ),
-                    }
-                )
-                continue
-            if node_question and node_evidence_retries < _MAX_NODE_EVIDENCE_RETRIES and not _has_sufficient_node_evidence(tool_trace):
-                node_evidence_retries += 1
-                evidence = await _gather_backend_node_evidence(message, tool_trace)
-                evidence_message = (
-                    "This is a node-specific troubleshooting question. Use the authoritative backend evidence "
-                    "below before answering. Do not describe the node as long-stable if the recent evidence "
-                    "shows a fresh attach, recommission, parent change, partition transition, or other recent "
-                    "state change. Explicitly call out recent-change evidence when present.\n\n"
-                    + _serialize_for_prompt(evidence, max_chars=_MAX_EVIDENCE_MESSAGE_CHARS)
-                    if evidence is not None
-                    else "This is a node-specific troubleshooting question. Gather node-specific and recent-change "
-                    "evidence yourself before answering."
-                )
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": evidence_message,
-                    }
-                )
-                continue
             audit = _coerce_audit_verdict(
                 await _audit_answer_candidate(
                 target,
@@ -2238,16 +1369,6 @@ async def direct_chat_turn(
             final_text = await _force_answer_from_existing_evidence(target, messages)
         if not final_text:
             final_text = "I couldn't complete the tool-assisted reasoning loop. Please retry with a narrower request."
-    final_text = await _finalize_candidate_text(
-        target=target,
-        messages=messages,
-        message=context_message,
-        candidate_text=final_text,
-        tool_trace=tool_trace,
-        history_comparison_question=history_comparison_question,
-        counter_question=counter_question,
-        internal_tool_request=internal_tool_request,
-    )
     duration_ms = max(0, int((time.perf_counter() - started) * 1000))
     return {
         "conversation_id": conversation_id or f"direct-{uuid.uuid4()}",

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.50 — Reflection-only direct-chat repair
+
+This patch removes the remaining deterministic direct-chat fallback text path
+so answer repair happens through the separate audit/reflection turn instead of
+hard-coded response rewriting.
+
+**Fixes:**
+- removes deterministic response clamps for internal-tool leakage, invented
+  dashboard actions, page-context contradiction rewrites, and history/counter
+  insufficiency text from the direct-chat runtime
+- keeps the direct-chat path UI-agnostic by relying on the model answer plus
+  audit/reflection rather than backend string parsing or substitution
+- updates regression coverage to validate the reflection-only chat path instead
+  of obsolete deterministic fallback behavior
+
 ## 0.11.49 — Local API regression harness and health alignment
 
 This patch closes the health-snapshot semantic mismatch and makes the API

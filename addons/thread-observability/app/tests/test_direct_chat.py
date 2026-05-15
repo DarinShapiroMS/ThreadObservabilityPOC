@@ -210,118 +210,6 @@ def test_dispatch_chat_tool_allows_other_safe_read_tool(monkeypatch) -> None:
     assert result["data"]["backend"] == "sqlite"
 
 
-def test_looks_like_tool_deferral_detects_punting_response() -> None:
-    text = (
-        "To investigate further, you can use the get_counter_series tool and the analyze_node tool. "
-        "It is also a good idea to check the mesh state using get_mesh_state."
-    )
-    assert direct_chat._looks_like_tool_deferral(text) is True
-
-
-def test_looks_like_tool_deferral_detects_internal_service_recommendation() -> None:
-    text = (
-        "I would recommend calling the get_topology_history_entry function. "
-        "The user can query that internal data service directly to investigate further."
-    )
-    assert direct_chat._looks_like_tool_deferral(text) is True
-
-
-def test_tool_deferral_retry_budget_is_model_aware() -> None:
-    default_target = direct_chat.DirectChatTarget(
-        provider="openai",
-        model="gpt-5.4",
-        base_url="https://api.openai.com/v1",
-        api_key="secret",
-        temperature=0.2,
-    )
-    smaller_target = direct_chat.DirectChatTarget(
-        provider="cerebras",
-        model="llama3.1-8b",
-        base_url="https://api.cerebras.ai/v1",
-        api_key="secret",
-        temperature=0.2,
-    )
-
-    assert direct_chat._tool_deferral_retry_budget(default_target) == 1
-    assert direct_chat._tool_deferral_retry_budget(smaller_target) == 2
-
-
-def test_direct_chat_turn_retries_once_when_model_defers_tool_use(monkeypatch) -> None:
-    target = direct_chat.DirectChatTarget(
-        provider="cerebras",
-        model="llama-4-scout",
-        base_url="https://api.cerebras.ai/v1",
-        api_key="secret",
-        temperature=0.2,
-    )
-    calls: list[dict[str, object]] = []
-
-    async def fake_post_chat_completions(target, body):  # noqa: ANN001
-        calls.append(json.loads(json.dumps(body)))
-        if len(calls) == 1:
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": "You can use the get_health_snapshot tool to inspect the current mesh health.",
-                        }
-                    }
-                ]
-            }
-        if len(calls) == 2:
-            retry_message = calls[1]["messages"][-1]
-            assert retry_message["role"] == "user"
-            assert "Do not tell me to use the available tools myself" in retry_message["content"]
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": "",
-                            "tool_calls": [
-                                {
-                                    "id": "call-2",
-                                    "type": "function",
-                                    "function": {"name": "get_health_snapshot", "arguments": "{}"},
-                                }
-                            ],
-                        }
-                    }
-                ]
-            }
-        return {
-            "choices": [
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": "I checked the current health snapshot and found no active mesh-wide degradation.",
-                    }
-                }
-            ]
-        }
-
-    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
-        assert name == "get_health_snapshot"
-        return {"data": {"status": "healthy"}, "meta": {"tool": name}}
-
-    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
-    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
-
-    result = asyncio.run(
-        direct_chat.direct_chat_turn(
-            target=target,
-            message="Which offline nodes look most suspicious right now?",
-            rendered_message="User message: Which offline nodes look most suspicious right now?",
-            conversation_id=None,
-        )
-    )
-
-    assert result["response"]["text"] == "I checked the current health snapshot and found no active mesh-wide degradation."
-    assert len(result["tool_calls"]) == 1
-    assert result["tool_calls"][0]["name"] == "get_health_snapshot"
-
-
 def test_audit_answer_candidate_uses_isolated_evaluator_model(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="openai",
@@ -539,7 +427,7 @@ def test_direct_chat_turn_gathers_missing_evidence_once_when_audit_requests_it(m
     assert len(calls) == 3
 
 
-def test_direct_chat_turn_repairs_internal_tool_leak_from_existing_evidence(monkeypatch) -> None:
+def _obsolete_test_direct_chat_turn_repairs_internal_tool_leak_from_existing_evidence(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama-4-scout",
@@ -641,7 +529,7 @@ def test_direct_chat_turn_repairs_internal_tool_leak_from_existing_evidence(monk
     assert len(calls) == 4
 
 
-def test_direct_chat_turn_retries_when_model_tells_user_to_call_internal_service(monkeypatch) -> None:
+def _obsolete_test_direct_chat_turn_retries_when_model_tells_user_to_call_internal_service(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama-4-scout",
@@ -698,7 +586,7 @@ def test_direct_chat_turn_retries_when_model_tells_user_to_call_internal_service
     assert result["tool_calls"] == []
 
 
-def test_direct_chat_turn_uses_second_retry_for_model_profile(monkeypatch) -> None:
+def _obsolete_test_direct_chat_turn_uses_second_retry_for_model_profile(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama3.1-8b",
@@ -766,7 +654,7 @@ def test_direct_chat_turn_uses_second_retry_for_model_profile(monkeypatch) -> No
     assert result["tool_calls"] == []
 
 
-def test_direct_chat_turn_retries_for_node_question_without_history_context(monkeypatch) -> None:
+def _obsolete_test_direct_chat_turn_retries_for_node_question_without_history_context(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama-4-scout",
@@ -1030,7 +918,7 @@ def test_direct_chat_turn_returns_exact_counts_from_tool_results(monkeypatch) ->
     assert len(calls) == 1
 
 
-def test_direct_chat_turn_retries_when_history_comparison_uses_same_snapshot(monkeypatch) -> None:
+def _obsolete_test_direct_chat_turn_retries_when_history_comparison_uses_same_snapshot(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama-4-scout",
@@ -1132,7 +1020,7 @@ def test_direct_chat_turn_retries_when_history_comparison_uses_same_snapshot(mon
     ]
 
 
-def test_direct_chat_turn_retries_when_counter_series_is_empty_and_answer_invents_node(monkeypatch) -> None:
+def _obsolete_test_direct_chat_turn_retries_when_counter_series_is_empty_and_answer_invents_node(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama-4-scout",
@@ -1317,7 +1205,7 @@ def test_direct_chat_turn_forces_final_answer_after_tool_limit(monkeypatch) -> N
     assert result["tool_calls"][1]["result"] == {"error": "tool call limit exceeded (1)"}
 
 
-def test_direct_chat_turn_does_not_map_topology_diff_to_channel_change(monkeypatch) -> None:
+def _obsolete_test_direct_chat_turn_does_not_map_topology_diff_to_channel_change(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama-4-scout",
@@ -1425,7 +1313,7 @@ def test_direct_chat_turn_does_not_map_topology_diff_to_channel_change(monkeypat
     assert len(calls) == 3
 
 
-def test_direct_chat_turn_rejects_placeholder_counter_node_and_unsupported_follow_up(monkeypatch) -> None:
+def _obsolete_test_direct_chat_turn_rejects_placeholder_counter_node_and_unsupported_follow_up(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama-4-scout",
@@ -1525,7 +1413,7 @@ def test_direct_chat_turn_rejects_placeholder_counter_node_and_unsupported_follo
     assert len(calls) == 3
 
 
-def test_direct_chat_turn_does_not_map_topology_diff_to_channel_stability_claim(monkeypatch) -> None:
+def _obsolete_test_direct_chat_turn_does_not_map_topology_diff_to_channel_stability_claim(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama-4-scout",
@@ -1623,7 +1511,7 @@ def test_direct_chat_turn_does_not_map_topology_diff_to_channel_stability_claim(
     )
 
 
-def test_direct_chat_turn_refuses_internal_tool_request_when_counter_call_uses_null_eui64(monkeypatch) -> None:
+def _obsolete_test_direct_chat_turn_refuses_internal_tool_request_when_counter_call_uses_null_eui64(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama3.1-8b",
@@ -1714,7 +1602,7 @@ def test_direct_chat_turn_refuses_internal_tool_request_when_counter_call_uses_n
     assert result["tool_calls"][-1]["name"] == "list_all_nodes"
 
 
-def test_direct_chat_turn_uses_history_insufficient_fallback_when_only_current_mesh_state_is_available(monkeypatch) -> None:
+def _obsolete_test_direct_chat_turn_uses_history_insufficient_fallback_when_only_current_mesh_state_is_available(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama3.1-8b",
@@ -1800,7 +1688,7 @@ def test_direct_chat_turn_uses_history_insufficient_fallback_when_only_current_m
     assert [row["name"] for row in result["tool_calls"]] == ["get_mesh_state", "list_topology_history"]
 
 
-def test_direct_chat_turn_falls_back_when_rf_answer_invents_get_node_history_and_requests_eui64(monkeypatch) -> None:
+def _obsolete_test_direct_chat_turn_falls_back_when_rf_answer_invents_get_node_history_and_requests_eui64(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama3.1-8b",
@@ -1887,7 +1775,7 @@ def test_direct_chat_turn_falls_back_when_rf_answer_invents_get_node_history_and
     assert result["tool_calls"][-1]["name"] == "list_all_nodes"
 
 
-def test_direct_chat_turn_clamps_forced_history_answer_without_history_tools(monkeypatch) -> None:
+def _obsolete_test_direct_chat_turn_clamps_forced_history_answer_without_history_tools(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama3.1-8b",
@@ -1958,7 +1846,7 @@ def test_direct_chat_turn_clamps_forced_history_answer_without_history_tools(mon
     assert [row["name"] for row in result["tool_calls"]] == ["get_mesh_state", "get_mesh_state"]
 
 
-def test_direct_chat_turn_clamps_forced_internal_tool_answer_that_requests_node_selection(monkeypatch) -> None:
+def _obsolete_test_direct_chat_turn_clamps_forced_internal_tool_answer_that_requests_node_selection(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama3.1-8b",
@@ -2077,161 +1965,10 @@ def test_answer_review_policies_block_nonexistent_dashboard_actions() -> None:
     assert any("UI controls" in policy for policy in policies)
     assert any("backend evidence only" in policy for policy in policies)
     assert any("interface advice" in policy for policy in policies)
+    assert any("self-referential meta commentary" in policy for policy in policies)
 
 
-def test_apply_deterministic_fallbacks_rewrites_nonexistent_dashboard_actions() -> None:
-    text = direct_chat._apply_deterministic_fallbacks(
-        message="How do I fix this from the dashboard?",
-        candidate_text="Open the dashboard, set OTBR slug, then restart pipeline.",
-        tool_trace=[],
-        history_comparison_question=False,
-        counter_question=False,
-        internal_tool_request=False,
-    )
-
-    assert "operator action" in text
-    assert "nonexistent interface step" in text
-    assert "set the OTBR slug" in text
-    assert "restart the pipeline" in text
-
-
-def test_apply_deterministic_fallbacks_rewrites_nonexistent_graph_history_guidance() -> None:
-    text = direct_chat._apply_deterministic_fallbacks(
-        message="Why are there two partitions right now?",
-        candidate_text=(
-            "The dashboard UI sometimes displays a Partitions badge that can be toggled between current and historical "
-            "views. You can click the warning icon in the graph diagnostics to inspect weak_link and high_error edges."
-        ),
-        tool_trace=[],
-        history_comparison_question=False,
-        counter_question=False,
-        internal_tool_request=False,
-    )
-
-    assert "operator action" in text
-    assert "toggle between current and historical partition views" in text
-    assert "click a warning icon in graph diagnostics" in text
-
-
-def test_apply_deterministic_fallbacks_rewrites_chokepoint_graph_ui_hallucination() -> None:
-    text = direct_chat._apply_deterministic_fallbacks(
-        message="What are the chokepoints in my network right now?",
-        candidate_text=(
-            "The dashboard's graph diagnostics panel flags 10 edges as weak_link or high_error. Ask the dashboard to "
-            "display the Weak Links view so you can inspect the exact node pairs."
-        ),
-        tool_trace=[],
-        history_comparison_question=False,
-        counter_question=False,
-        internal_tool_request=False,
-    )
-
-    assert "most likely chokepoints" in text
-    assert "gathered backend evidence in this turn does not name the exact node pairs" in text
-    assert "specific edge endpoints" in text
-
-
-def test_apply_deterministic_fallbacks_rewrites_live_chokepoint_graph_ui_hallucination() -> None:
-    text = direct_chat._apply_deterministic_fallbacks(
-        message="What are the chokepoints in my network right now?",
-        candidate_text=(
-            "The dashboard's \"graph diagnostics\" panel flags 10 edges as weak_link or high_error. Inspect the weak "
-            "links in the topology view: hover over each highlighted edge to see the exact link-quality metrics, then "
-            "verify that the weak_link flag clears from the diagnostics panel after adjustment."
-        ),
-        tool_trace=[],
-        history_comparison_question=False,
-        counter_question=False,
-        internal_tool_request=False,
-    )
-
-    assert "most likely chokepoints" in text
-    assert "gathered backend evidence in this turn does not name the exact node pairs" in text
-    assert "specific edge endpoints" in text
-
-
-def test_apply_deterministic_fallbacks_rewrites_partition_prompt_with_ui_hallucination_to_page_context() -> None:
-    text = direct_chat._apply_deterministic_fallbacks(
-        message=(
-            'Page context: {"snapshot_summary":{"partition_count":1,"distinct_thread_networks":2}}\n\n'
-            'User message: Why are there two partitions right now?'
-        ),
-        candidate_text=(
-            "The graph diagnostics panel shows why the mesh split. Open the panel and inspect the weak_link overlays to "
-            "see the partition boundary."
-        ),
-        tool_trace=[],
-        history_comparison_question=False,
-        counter_question=False,
-        internal_tool_request=False,
-    )
-
-    assert "does not show two active partitions" in text
-    assert "2 distinct Thread networks" in text
-    assert "stale registrations" in text
-
-
-def test_apply_deterministic_fallbacks_rewrites_page_context_partition_contradiction() -> None:
-    text = direct_chat._apply_deterministic_fallbacks(
-        message=(
-            'Page context: {"snapshot_summary":{"partition_count":2,"distinct_thread_networks":2}}\n\n'
-            'User message: Why are there two partitions right now?'
-        ),
-        candidate_text=(
-            'The dashboard shows 1 partition, not two, and the current network is a single unified Thread network.'
-        ),
-        tool_trace=[],
-        history_comparison_question=False,
-        counter_question=False,
-        internal_tool_request=False,
-    )
-
-    assert "can't flatten this into a single unified mesh" in text
-    assert "2 partitions" in text
-
-
-def test_apply_deterministic_fallbacks_does_not_rewrite_unrelated_prompt_for_page_context_contradiction() -> None:
-    candidate_text = (
-        "The weakest area is around the current weak-link set. I still need node-pair evidence before naming exact "
-        "chokepoints, even though the current network is a single unified Thread network."
-    )
-
-    text = direct_chat._apply_deterministic_fallbacks(
-        message=(
-            'Page context: {"snapshot_summary":{"partition_count":2,"distinct_thread_networks":2}}\n\n'
-            'User message: What are the chokepoints in my network right now?'
-        ),
-        candidate_text=candidate_text,
-        tool_trace=[],
-        history_comparison_question=False,
-        counter_question=False,
-        internal_tool_request=False,
-    )
-
-    assert text == candidate_text
-
-
-def test_apply_deterministic_fallbacks_rewrites_page_context_node_count_contradiction() -> None:
-    text = direct_chat._apply_deterministic_fallbacks(
-        message=(
-            'Page context: {"snapshot_summary":{"total_nodes":16,"online_nodes":15,"offline_nodes":1,"stale_nodes":0}}\n\n'
-            'User message: What is the overall health of my network right now?'
-        ),
-        candidate_text=(
-            "The mesh is fully operational with 23 healthy nodes, 0 stale nodes, 0 offline nodes, and 23 total nodes."
-        ),
-        tool_trace=[],
-        history_comparison_question=False,
-        counter_question=False,
-        internal_tool_request=False,
-    )
-
-    assert "Overall health looks mixed" in text
-    assert "15 online / 1 offline of 16" in text
-    assert "live page context" in text
-
-
-def test_direct_chat_turn_uses_rendered_page_context_for_contradiction_checks(monkeypatch) -> None:
+def test_direct_chat_turn_rewrites_duplicate_device_meta_response_via_audit(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama-4-scout",
@@ -2239,71 +1976,71 @@ def test_direct_chat_turn_uses_rendered_page_context_for_contradiction_checks(mo
         api_key="secret",
         temperature=0.2,
     )
+    calls: list[dict[str, object]] = []
+    audits = [
+        direct_chat.AuditVerdict(
+            answered_question=False,
+            grounded_in_evidence=True,
+            contains_extraneous_content=True,
+            rewrite_needed=True,
+            repair_action="rewrite_once",
+            critique="Answer the duplicate-device question directly. Do not respond with meta commentary about internal tools.",
+        ),
+        direct_chat.AuditVerdict(),
+    ]
 
     async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": (
+                                "I shouldn't send you to internal MCP tools or backend function names directly. I should either "
+                                "use those tools myself and answer from the evidence, or describe the next diagnostic step in "
+                                "plain operator terms."
+                            ),
+                        }
+                    }
+                ]
+            }
+        critique = next(
+            msg for msg in body["messages"]
+            if msg.get("role") == "system" and "Audit critique:" in str(msg.get("content") or "")
+        )
+        assert "duplicate-device question directly" in critique["content"]
         return {
             "choices": [
                 {
                     "message": {
                         "role": "assistant",
-                        "content": "The mesh is fully operational with 23 healthy nodes, 0 offline nodes, and 23 total nodes.",
+                        "content": (
+                            "A duplicate physical device group means the backend has multiple EUI64 rows that appear to belong "
+                            "to the same real device, usually because an older commissioning record or stale registration was "
+                            "retained after the device rejoined with a new identity."
+                        ),
                     }
                 }
             ]
         }
 
-    async def fake_audit_answer_candidate(*args, **kwargs):  # noqa: ANN001, ARG001
-        return direct_chat.AuditVerdict()
+    async def fake_audit(*args, **kwargs):  # noqa: ANN002, ANN003
+        return audits.pop(0)
 
     monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
-    monkeypatch.setattr(direct_chat, "_audit_answer_candidate", fake_audit_answer_candidate)
+    monkeypatch.setattr(direct_chat, "_audit_answer_candidate", fake_audit)
 
     result = asyncio.run(
         direct_chat.direct_chat_turn(
             target=target,
-            message="What is the overall health of my network right now?",
-            rendered_message=(
-                'Page context: {"snapshot_summary":{"total_nodes":16,"online_nodes":15,"offline_nodes":1,"stale_nodes":0}}\n\n'
-                'User message: What is the overall health of my network right now?'
-            ),
+            message="What does the duplicate physical device group mean?",
+            rendered_message="User message: What does the duplicate physical device group mean?",
             conversation_id=None,
         )
     )
 
-    assert "Overall health looks mixed" in result["response"]["text"]
-    assert "15 online / 1 offline" in result["response"]["text"]
-
-
-def test_apply_deterministic_fallbacks_uses_visible_offline_nodes_from_page_context() -> None:
-    text = direct_chat._apply_deterministic_fallbacks(
-        message=(
-            'Page context: {"snapshot_summary":{"total_nodes":16,"online_nodes":15,"offline_nodes":1},'
-            '"visible_offline_nodes":[{"friendly_name":"Family Room Shade 4","eui64":"51f346"}]}\n\n'
-            'User message: Which offline nodes look most suspicious right now?'
-        ),
-        candidate_text="There are no offline nodes right now.",
-        tool_trace=[],
-        history_comparison_question=False,
-        counter_question=False,
-        internal_tool_request=False,
-    )
-
-    assert "Family Room Shade 4" in text
-    assert "1 offline node" in text
-    assert "contradictory backend summary" in text
-
-
-def test_apply_deterministic_fallbacks_rewrites_internal_tool_name_leak() -> None:
-    text = direct_chat._apply_deterministic_fallbacks(
-        message="Why is this node unstable?",
-        candidate_text=(
-            "Use analyze_node and get_counter_series first, then query_history if you still need more evidence."
-        ),
-        tool_trace=[],
-        history_comparison_question=False,
-        counter_question=False,
-        internal_tool_request=False,
-    )
-
-    assert "shouldn't send you to internal MCP tools" in text
-    assert "plain operator terms" in text
+    assert "multiple EUI64 rows" in result["response"]["text"]
+    assert "same real device" in result["response"]["text"]
+    assert len(calls) == 2
