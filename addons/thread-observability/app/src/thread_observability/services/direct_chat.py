@@ -28,7 +28,7 @@ _MAX_TOOL_CALLS = 8
 _MAX_TOOL_RESULT_MESSAGE_CHARS = 3500
 _MAX_EVIDENCE_MESSAGE_CHARS = 5000
 _DEFAULT_SYSTEM_PROMPT = (
-    "You are the Thread Observability Thread-network troubleshooting assistant. Answer using only the user's "
+    "You are the Thread Mesh Detective Thread-network troubleshooting assistant. Answer using only the user's "
     "request, evidence gathered from available diagnostic tools, and retained backend conversation context. "
     "Use tools proactively when current mesh state, counters, history, routing, health, or node-specific evidence is relevant. "
     "For multi-part questions, gather evidence for each requested dimension that the available tools can cover before answering; "

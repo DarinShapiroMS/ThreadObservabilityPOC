@@ -577,7 +577,7 @@ async def _lifespan(app: FastAPI):
 def create_core_app() -> FastAPI:
     """Create the core FastAPI application."""
     app = FastAPI(
-        title="Thread Observability Core API",
+        title="Thread Mesh Detective Core API",
         version=ADDON_VERSION,
         lifespan=_lifespan,
     )

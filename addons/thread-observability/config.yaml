@@ -1,8 +1,8 @@
-name: Thread Observability
+name: Thread Mesh Detective
 version: 0.11.53
 slug: thread-observability
-description: Observe and troubleshoot Thread network health in Home Assistant.
-url: https://github.com/DarinShapiroMS/ThreadObservabilityPOC/tree/main/addons/thread-observability
+description: Detect and troubleshoot Thread mesh health in Home Assistant.
+url: https://github.com/darinshapiro/ThreadObservabilityPOC/tree/main/addons/thread-observability
 arch:
   - aarch64
   - amd64
@@ -17,8 +17,8 @@ ports:
   8099/tcp: 8099
   8100/tcp: 8100
 ports_description:
-  8099/tcp: Thread Observability API and UI
-  8100/tcp: Thread Observability MCP API
+  8099/tcp: Thread Mesh Detective API and UI
+  8100/tcp: Thread Mesh Detective MCP API
 map:
   - config:rw
   - ssl
