@@ -501,7 +501,7 @@ def _tool_result_for_prompt(name: str, arguments: dict[str, Any], result: Any) -
 
 
 def _validate_chat_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
-    if name in {"get_counter_series", "get_signal_series", "analyze_node"}:
+    if name in {"get_counter_series", "get_signal_series", "get_node_link_signal_history", "analyze_node"}:
         eui64 = arguments.get("eui64")
         if not _is_valid_eui64(eui64):
             return {"error": "invalid eui64 argument: expected 16 hex characters"}

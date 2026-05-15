@@ -37,6 +37,7 @@ from ..utils.datetime import utc_now_iso
 from ..services import chat_memory
 from ..services import direct_chat
 from . import signal_series as signal_series_mod
+from . import link_signal_history as link_signal_history_mod
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
 
@@ -1053,6 +1054,27 @@ def create_core_app() -> FastAPI:
             )
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc), "series": [], "metrics": {}}
+
+    @app.get("/v1/signals/{eui64}/links/history")
+    def node_link_signal_history(
+        eui64: str,
+        since: str | None = None,
+        until: str | None = None,
+        peer_eui64: str | None = None,
+        source: str | None = None,
+        limit: int = 5000,
+    ) -> dict[str, object]:
+        try:
+            return link_signal_history_mod.get_node_link_signal_history(
+                eui64=eui64.lower(),
+                since=since,
+                until=until,
+                peer_eui64=peer_eui64.lower() if isinstance(peer_eui64, str) else None,
+                source=source,
+                limit=limit,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc), "links": []}
 
     @app.post("/v1/reasoner/run")
     def reasoner_run() -> dict[str, object]:

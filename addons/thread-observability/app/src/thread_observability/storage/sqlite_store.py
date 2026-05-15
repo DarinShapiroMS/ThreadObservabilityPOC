@@ -37,6 +37,8 @@ DEFAULT_DB_PATH = Path(
 # claimed by its parent router in NeighborTable. Keep this window aligned
 # with the topology/UI SED mesh-alive view.
 _SED_MESH_ALIVE_WINDOW_SECONDS = 300
+_LINK_SIGNAL_HEARTBEAT_MINUTES = 60
+_LINK_SIGNAL_RSSI_CHANGE_DB = 3
 
 # Each entry is applied in order; ``version`` matches its index (1-based).
 _MIGRATIONS: list[str] = [
@@ -646,6 +648,36 @@ _MIGRATIONS: list[str] = [
     """
     ALTER TABLE pipeline_ticks ADD COLUMN db_size_bytes INTEGER;
     """,
+    # v20: historical per-link signal samples (change + heartbeat driven)
+    """
+    CREATE TABLE IF NOT EXISTS link_signal_samples (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        reporter_eui64     TEXT NOT NULL,
+        neighbor_eui64     TEXT NOT NULL,
+        source             TEXT NOT NULL,
+        observed_at        TEXT NOT NULL,
+        partition_id       INTEGER,
+        present            INTEGER NOT NULL DEFAULT 1,
+        change_reason      TEXT NOT NULL,
+        rssi_avg           INTEGER,
+        rssi_last          INTEGER,
+        lqi_in             INTEGER,
+        lqi_out            INTEGER,
+        is_child           INTEGER,
+        frame_error_rate   INTEGER,
+        message_error_rate INTEGER,
+        path_cost          INTEGER,
+        next_hop_router_id INTEGER,
+        link_established   INTEGER,
+        allocated          INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_link_signal_samples_reporter_ts
+        ON link_signal_samples(reporter_eui64, observed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_link_signal_samples_neighbor_ts
+        ON link_signal_samples(neighbor_eui64, observed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_link_signal_samples_link_ts
+        ON link_signal_samples(reporter_eui64, neighbor_eui64, source, observed_at DESC);
+    """,
 ]
 
 
@@ -792,6 +824,48 @@ class SQLiteStore:
             " FROM events WHERE "
             + " AND ".join(clauses)
             + " ORDER BY ts ASC, id ASC LIMIT ?"
+        )
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_link_signal_samples(
+        self,
+        *,
+        eui64: str | None = None,
+        reporter_eui64: str | None = None,
+        neighbor_eui64: str | None = None,
+        source: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 5000,
+    ) -> list[dict[str, Any]]:
+        """Return retained historical link-signal samples, oldest first."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if eui64:
+            clauses.append("(reporter_eui64 = ? OR neighbor_eui64 = ?)")
+            params.extend([eui64, eui64])
+        if reporter_eui64:
+            clauses.append("reporter_eui64 = ?")
+            params.append(reporter_eui64)
+        if neighbor_eui64:
+            clauses.append("neighbor_eui64 = ?")
+            params.append(neighbor_eui64)
+        if source:
+            clauses.append("source = ?")
+            params.append(source)
+        if since:
+            clauses.append("observed_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("observed_at <= ?")
+            params.append(until)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(max(1, min(int(limit), 100_000)))
+        sql = (
+            "SELECT * FROM link_signal_samples"
+            f"{where} ORDER BY observed_at ASC, id ASC LIMIT ?"
         )
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
@@ -2018,6 +2092,7 @@ class SQLiteStore:
         links: list[dict[str, Any]],
         *,
         partition_id: int | None = None,
+        observed_at: str | None = None,
     ) -> dict[str, Any]:
         """Replace all links for a given (reporter, source) tuple atomically.
 
@@ -2063,14 +2138,17 @@ class SQLiteStore:
         race — a second concurrent sweep on the same reporter would
         otherwise destroy the evidence before we read it.
         """
-        now = _utc_now()
+        now = observed_at or _utc_now()
         inserted = 0
         with self._tx() as conn:
             # Snapshot the previous neighbour set + frame counters BEFORE
             # deleting so we can diff against the incoming set. Cheap:
             # indexed lookup on (reporter_eui64, source).
             prior_rows = conn.execute(
-                "SELECT neighbor_eui64, link_frame_counter, mle_frame_counter"
+                "SELECT neighbor_eui64, link_frame_counter, mle_frame_counter,"
+                "       rssi_avg, rssi_last, lqi_in, lqi_out, is_child,"
+                "       frame_error_rate, message_error_rate, path_cost,"
+                "       next_hop_router_id, link_established, allocated, partition_id"
                 "  FROM links"
                 " WHERE reporter_eui64 = ? AND source = ?",
                 (reporter_eui64, source),
@@ -2083,6 +2161,36 @@ class SQLiteStore:
                 }
                 for r in prior_rows
                 if r[0]
+            }
+            prior_link_rows: dict[str, dict[str, Any]] = {
+                r[0]: {
+                    "rssi_avg": r[3],
+                    "rssi_last": r[4],
+                    "lqi_in": r[5],
+                    "lqi_out": r[6],
+                    "is_child": r[7],
+                    "frame_error_rate": r[8],
+                    "message_error_rate": r[9],
+                    "path_cost": r[10],
+                    "next_hop_router_id": r[11],
+                    "link_established": r[12],
+                    "allocated": r[13],
+                    "partition_id": r[14],
+                }
+                for r in prior_rows
+                if r[0]
+            }
+            history_rows = conn.execute(
+                "SELECT neighbor_eui64, MAX(observed_at) AS observed_at"
+                "  FROM link_signal_samples"
+                " WHERE reporter_eui64 = ? AND source = ?"
+                " GROUP BY neighbor_eui64",
+                (reporter_eui64, source),
+            ).fetchall()
+            last_history_at: dict[str, str] = {
+                str(row[0]): str(row[1])
+                for row in history_rows
+                if row[0] and row[1]
             }
             conn.execute(
                 "DELETE FROM links WHERE reporter_eui64 = ? AND source = ?",
@@ -2108,6 +2216,38 @@ class SQLiteStore:
                 # Registry-first (v9): mark the row as a stale reference if
                 # the neighbor isn't in the (registry-driven) nodes table.
                 neighbor_known = 1 if neighbor in known_euis else 0
+
+                signal_row = {
+                    "partition_id": partition_id,
+                    "rssi_avg": link.get("rssi_avg"),
+                    "rssi_last": link.get("rssi_last"),
+                    "lqi_in": link.get("lqi_in"),
+                    "lqi_out": link.get("lqi_out"),
+                    "is_child": _b(link.get("is_child")),
+                    "frame_error_rate": link.get("frame_error_rate"),
+                    "message_error_rate": link.get("message_error_rate"),
+                    "path_cost": link.get("path_cost"),
+                    "next_hop_router_id": link.get("next_hop_router_id"),
+                    "link_established": _b(link.get("link_established")),
+                    "allocated": _b(link.get("allocated")),
+                }
+                reason = _link_signal_sample_reason(
+                    previous=prior_link_rows.get(str(neighbor)),
+                    current=signal_row,
+                    last_history_at=last_history_at.get(str(neighbor)),
+                    now=now,
+                )
+                if reason is not None:
+                    _insert_link_signal_sample(
+                        conn,
+                        reporter_eui64=reporter_eui64,
+                        neighbor_eui64=str(neighbor),
+                        source=source,
+                        observed_at=now,
+                        present=1,
+                        change_reason=reason,
+                        values=signal_row,
+                    )
 
                 conn.execute(
                     """
@@ -2153,6 +2293,17 @@ class SQLiteStore:
                 inserted += 1
             added = sorted(new_neighbors - prior_neighbors)
             removed = sorted(prior_neighbors - new_neighbors)
+            for neighbor in removed:
+                _insert_link_signal_sample(
+                    conn,
+                    reporter_eui64=reporter_eui64,
+                    neighbor_eui64=neighbor,
+                    source=source,
+                    observed_at=now,
+                    present=0,
+                    change_reason="removed",
+                    values=prior_link_rows.get(neighbor) or {"partition_id": partition_id},
+                )
         return {
             "inserted": inserted,
             "added": added,
@@ -3119,6 +3270,101 @@ def _row_to_event(row: sqlite3.Row) -> dict[str, Any]:
         except Exception:  # noqa: BLE001
             d["payload"] = {"_raw": payload}
     return d
+
+
+def _insert_link_signal_sample(
+    conn: sqlite3.Connection,
+    *,
+    reporter_eui64: str,
+    neighbor_eui64: str,
+    source: str,
+    observed_at: str,
+    present: int,
+    change_reason: str,
+    values: dict[str, Any],
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO link_signal_samples(
+            reporter_eui64, neighbor_eui64, source, observed_at,
+            partition_id, present, change_reason,
+            rssi_avg, rssi_last, lqi_in, lqi_out,
+            is_child, frame_error_rate, message_error_rate, path_cost,
+            next_hop_router_id, link_established, allocated
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            reporter_eui64,
+            neighbor_eui64,
+            source,
+            observed_at,
+            values.get("partition_id"),
+            present,
+            change_reason,
+            values.get("rssi_avg"),
+            values.get("rssi_last"),
+            values.get("lqi_in"),
+            values.get("lqi_out"),
+            values.get("is_child"),
+            values.get("frame_error_rate"),
+            values.get("message_error_rate"),
+            values.get("path_cost"),
+            values.get("next_hop_router_id"),
+            values.get("link_established"),
+            values.get("allocated"),
+        ),
+    )
+
+
+def _rssi_changed(previous: Any, current: Any) -> bool:
+    if previous is None and current is None:
+        return False
+    if previous is None or current is None:
+        return True
+    try:
+        return abs(int(current) - int(previous)) >= _LINK_SIGNAL_RSSI_CHANGE_DB
+    except (TypeError, ValueError):
+        return previous != current
+
+
+def _link_signal_sample_reason(
+    *,
+    previous: dict[str, Any] | None,
+    current: dict[str, Any],
+    last_history_at: str | None,
+    now: str,
+) -> str | None:
+    if previous is None:
+        return "added"
+    if _rssi_changed(previous.get("rssi_avg"), current.get("rssi_avg")):
+        return "changed"
+    if _rssi_changed(previous.get("rssi_last"), current.get("rssi_last")):
+        return "changed"
+    for key in (
+        "lqi_in",
+        "lqi_out",
+        "is_child",
+        "frame_error_rate",
+        "message_error_rate",
+        "path_cost",
+        "next_hop_router_id",
+        "link_established",
+        "allocated",
+        "partition_id",
+    ):
+        if previous.get(key) != current.get(key):
+            return "changed"
+    if not last_history_at:
+        return "heartbeat"
+    now_dt = datetime.fromisoformat(now)
+    last_dt = datetime.fromisoformat(last_history_at)
+    if last_dt.tzinfo is None:
+        last_dt = last_dt.replace(tzinfo=UTC)
+    if now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=UTC)
+    if now_dt - last_dt >= timedelta(minutes=_LINK_SIGNAL_HEARTBEAT_MINUTES):
+        return "heartbeat"
+    return None
 
 
 _store: SQLiteStore | None = None

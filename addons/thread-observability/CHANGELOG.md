@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.11.56 — Add retained link signal history and clearer tool routing
+
+This patch adds retained per-link signal history so network-change questions
+can be grounded in adjacent-link evidence over time, and sharpens MCP tool
+descriptions so the AI can distinguish chronology, topology-diff, per-node
+signal, and per-link signal use cases more reliably.
+
+**Fixes:**
+- adds append-only `link_signal_samples` retention with change-plus-heartbeat
+  semantics, including explicit removal samples when a previously observed
+  adjacent link disappears
+- adds node-centric adjacent-link history access through both MCP and HTTP,
+  with per-link RSSI/LQI summaries and optional peer/source filtering
+- adds focused regression coverage for retained link-signal storage, grouping,
+  MCP registration, and HTTP retrieval
+- clarifies overlapping MCP tool descriptions so chronology questions route to
+  `query_history`, structural network-change questions route to
+  `diff_topology_history`, per-node signal questions route to
+  `get_signal_series`, and adjacent-link quality questions route to
+  `get_node_link_signal_history`
+
 ## 0.11.55 — Add signal time series and tighten chat evidence handling
 
 This patch adds a first-class per-device signal time-series surface so

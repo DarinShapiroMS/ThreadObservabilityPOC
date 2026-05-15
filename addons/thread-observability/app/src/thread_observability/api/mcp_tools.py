@@ -19,6 +19,7 @@ from . import supervisor_client
 from . import triage as triage_mod
 from . import counter_series as counter_series_mod
 from . import signal_series as signal_series_mod
+from . import link_signal_history as link_signal_history_mod
 from ..config import get_config
 from ..health import build_health_snapshot as _build_health_snapshot
 from ..pipeline import nodes as nodes_mod
@@ -359,7 +360,9 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "row is normalized to {ts, source, kind, eui64?, severity?, "
             "details, ref_id} so an AI consultant can correlate Thread-side, "
             "issue-side and observer-side activity in one round-trip. Filter "
-            "by eui64, kind list, or source list."
+            "by eui64, kind list, or source list. Use this for chronology questions like what happened when, not for "
+            "per-link RSSI/LQI trends or structural topology diffs. Prefer get_signal_series for per-node signal over time, "
+            "get_node_link_signal_history for adjacent-link quality changes, and diff_topology_history for before/after topology structure."
         ),
         "inputSchema": {
             "type": "object",
@@ -445,7 +448,8 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "Tier 4. Return a structured diff between two topology "
             "snapshots: added/removed nodes, per-node role/partition/parent "
             "transitions, and added/removed links. ``snapshot_id_a`` is the "
-            "older / baseline, ``snapshot_id_b`` is the newer / candidate."
+            "older / baseline, ``snapshot_id_b`` is the newer / candidate. Use this for structural network-change questions, not to claim that signal "
+            "quality improved or degraded. For RSSI/LQI evidence use get_signal_series or get_node_link_signal_history instead."
         ),
         "inputSchema": {
             "type": "object",
@@ -689,7 +693,9 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "Use when: you need before/after per-device signal evidence over time, such as whether a node's RSSI or LQI "
             "got better or worse across a troubleshooting window. Returns event-backed RSSI/LQI samples for one node over "
             "[since, until], plus summary metrics (first, last, delta, min, max, avg). "
-            "Caveats: event-driven telemetry only; sparse series mean the backend did not observe signal-bearing events in that window."
+            "Use this for one node's own observed signal samples, not for peer-by-peer adjacent-link comparison. "
+            "Caveats: event-driven telemetry only; sparse series mean the backend did not observe signal-bearing events in that window. "
+            "If the question is which peer or link improved, degraded, appeared, or disappeared over time, prefer get_node_link_signal_history."
         ),
         "inputSchema": {
             "type": "object",
@@ -698,6 +704,27 @@ TOOL_DEFS: list[dict[str, Any]] = [
                 "since": {"type": "string", "description": "ISO-8601 lower bound; default 24h ago."},
                 "until": {"type": "string", "description": "ISO-8601 upper bound; default now."},
                 "resolution": {"type": "string", "enum": ["raw", "5min"], "default": "raw", "description": "Return raw event samples or 5-minute averages."},
+            },
+            "required": ["eui64"],
+        },
+    },
+    {
+        "name": "get_node_link_signal_history",
+        "description": (
+            "Use when: you need retained historical link-by-link signal changes for one node across pipeline observations. "
+            "Returns adjacent-link history over [since, until], including added/changed/heartbeat/removed samples and per-link RSSI/LQI summaries. "
+            "Prefer this for network-change questions about which links or peers improved or degraded over time. Use this instead of get_signal_series when the "
+            "question is about adjacent peers, link appearance/disappearance, or per-link quality change rather than one node's event-backed signal samples."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "eui64": {"type": "string", "description": "Target node EUI-64 whose adjacent-link history should be returned."},
+                "since": {"type": "string", "description": "ISO-8601 lower bound; default 24h ago."},
+                "until": {"type": "string", "description": "ISO-8601 upper bound; default now."},
+                "peer_eui64": {"type": "string", "description": "Optional peer EUI-64 to limit history to one adjacent link."},
+                "source": {"type": "string", "enum": ["neighbor_table", "route_table"], "description": "Optional source filter."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 5000, "description": "Maximum historical samples to scan."},
             },
             "required": ["eui64"],
         },
@@ -923,6 +950,7 @@ _READ_TOOLS: frozenset[str] = frozenset({
     "get_counter_series",
     "compare_node_counters",
     "get_signal_series",
+    "get_node_link_signal_history",
 })
 
 
@@ -1339,6 +1367,18 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 since=arguments.get("since"),
                 until=arguments.get("until"),
                 resolution=str(arguments.get("resolution") or "raw"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "get_node_link_signal_history":
+        try:
+            return link_signal_history_mod.get_node_link_signal_history(
+                eui64=str(arguments.get("eui64") or ""),
+                since=arguments.get("since"),
+                until=arguments.get("until"),
+                peer_eui64=arguments.get("peer_eui64"),
+                source=arguments.get("source"),
+                limit=int(arguments.get("limit") or 5000),
             )
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}

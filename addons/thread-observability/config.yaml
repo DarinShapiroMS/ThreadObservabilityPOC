@@ -1,5 +1,5 @@
 name: Thread Mesh Detective
-version: 0.11.55
+version: 0.11.56
 slug: thread-observability
 description: Detect and troubleshoot Thread mesh health in Home Assistant.
 url: https://github.com/darinshapiro/ThreadObservabilityPOC/tree/main/addons/thread-observability
