@@ -399,8 +399,9 @@ def _build_sed_mesh_state(s: SQLiteStore) -> dict[str, dict[str, Any]]:
     whether the sleepy has anything to say.
 
     This helper joins those two views: any recent ``neighbor_table`` row for
-    a sleepy device is evidence some router still sees it on-mesh, even when
-    the upstream source omitted the explicit ``is_child=1`` marker. We expose:
+    a sleepy device is evidence the mesh still sees it on-mesh, including the
+    live shape where the sleepy node reports its parent as an outgoing peer
+    instead of showing up as another router's incoming child row. We expose:
 
       ``mesh_alive`` (bool)            — at least one parent claims the
                                          child within
@@ -418,16 +419,32 @@ def _build_sed_mesh_state(s: SQLiteStore) -> dict[str, dict[str, Any]]:
     """
     now = datetime.now(tz=UTC)
     with s._lock:  # noqa: SLF001
+        sleepy_rows = s._conn.execute(  # noqa: SLF001
+            "SELECT eui64 FROM nodes WHERE routing_role = 'sleepy_end_device'"
+        ).fetchall()
+        sleepy_euis = [r["eui64"] for r in sleepy_rows if r["eui64"]]
+        if not sleepy_euis:
+            return {}
+        placeholders = ",".join("?" for _ in sleepy_euis)
         rows = s._conn.execute(  # noqa: SLF001
-            "SELECT neighbor_eui64, MAX(observed_at) AS latest"
-            "  FROM links"
-            " WHERE source = 'neighbor_table'"
-            "   AND neighbor_eui64 IS NOT NULL"
-            " GROUP BY neighbor_eui64"
+            "SELECT sleepy_eui64, MAX(observed_at) AS latest"
+            "  FROM ("
+            "        SELECT neighbor_eui64 AS sleepy_eui64, observed_at"
+            "          FROM links"
+            "         WHERE source = 'neighbor_table'"
+            f"           AND neighbor_eui64 IN ({placeholders})"
+            "        UNION ALL"
+            "        SELECT reporter_eui64 AS sleepy_eui64, observed_at"
+            "          FROM links"
+            "         WHERE source = 'neighbor_table'"
+            f"           AND reporter_eui64 IN ({placeholders})"
+            "       ) AS sleepy_links"
+            " GROUP BY sleepy_eui64",
+            sleepy_euis + sleepy_euis,
         ).fetchall()
     out: dict[str, dict[str, Any]] = {}
     for r in rows:
-        nei = r["neighbor_eui64"]
+        nei = r["sleepy_eui64"]
         latest = r["latest"]
         if not nei or not latest:
             continue

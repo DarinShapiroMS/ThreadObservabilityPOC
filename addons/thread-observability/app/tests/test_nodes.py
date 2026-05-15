@@ -199,6 +199,26 @@ def test_list_nodes_enriched_marks_sed_mesh_alive_without_is_child(store) -> Non
     assert enriched[child]["sed_classification"] == "fresh"
 
 
+def test_list_nodes_enriched_marks_sed_mesh_alive_from_reported_parent_link(store) -> None:
+    child = "ef" * 8
+    parent = "01" * 8
+
+    store.upsert_node_metadata(eui64=child, friendly_name="Window Shade", device_id="shade-3")
+    store.upsert_node_metadata(eui64=parent, friendly_name="Hall Router")
+    store.set_node_diagnostics(child, routing_role="sleepy_end_device")
+    store.set_node_diagnostics(parent, routing_role="router")
+    store.replace_links_for_reporter(child, "neighbor_table", [
+        {"neighbor_eui64": parent, "rssi_avg": -62, "lqi_out": 3},
+    ])
+
+    enriched = {n["eui64"]: n for n in nodes.list_nodes_enriched(store=store, include_signal_strength=True)}
+
+    assert enriched[child]["mesh_alive"] is True
+    assert enriched[child]["sed_classification"] == "fresh"
+    assert enriched[child]["parent_eui64"] == parent
+    assert enriched[child]["parent_inferred"] is True
+
+
 def _setup_three_router_partition(store) -> tuple[str, str, str]:
     """Set up an OTBR + two routers in one partition with route-table links.
 

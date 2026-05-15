@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.43 — Sleepy-device reported-link follow-up
+
+This patch fixes the remaining live sleepy-device gap found after the
+0.11.42 rollout.
+
+**Fixes:**
+- treats a sleepy device's own reported parent link as mesh-alive evidence,
+  not just incoming neighbor-table sightings from other routers
+- keeps sleepy devices in the `sleeping` state when the live payload only has
+  the outgoing `reported_links` shape seen in Home Assistant
+- adds regression coverage for the exact live shape where an inferred parent is
+  present but no incoming child row exists
+
 ## 0.11.42 — Live validation follow-up
 
 This patch fixes the remaining live gaps found immediately after the 0.11.41 rollout.

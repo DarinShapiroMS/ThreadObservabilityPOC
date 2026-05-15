@@ -1797,8 +1797,9 @@ class SQLiteStore:
                 * ``sleeping``     — HA-registered sleepy end device with
                     ``available = 0`` (or still-unprobed stale availability) while a
                     recent NeighborTable sighting still places it on the mesh within
-                    the last five minutes, even if the upstream source omitted the
-                    explicit ``is_child`` marker.
+                    the last five minutes, including the live shape where the sleepy
+                    device reports its parent as an outgoing peer instead of being
+                    claimed by an incoming ``is_child`` row.
                 * ``offline``      — ``available = 0`` AND HA-registered
           (``device_id`` not null), OR ``available IS NULL`` but the row
           has a ``device_id`` (registry-known, availability not yet
@@ -1845,10 +1846,13 @@ class SQLiteStore:
                                                 AND EXISTS (
                                                         SELECT 1
                                                             FROM links
-                                                         WHERE links.neighbor_eui64 = nodes.eui64
-                                                             AND links.source = 'neighbor_table'
+                                                         WHERE links.source = 'neighbor_table'
                                                              AND links.observed_at IS NOT NULL
                                                              AND links.observed_at >= ?
+                                                             AND (
+                                                                     links.neighbor_eui64 = nodes.eui64
+                                                                     OR links.reporter_eui64 = nodes.eui64
+                                                             )
                                                 )
                            THEN 'sleeping'
                        WHEN available = 0 AND device_id IS NOT NULL
@@ -1867,10 +1871,13 @@ class SQLiteStore:
                                                 AND EXISTS (
                                                         SELECT 1
                                                             FROM links
-                                                         WHERE links.neighbor_eui64 = nodes.eui64
-                                                             AND links.source = 'neighbor_table'
+                                                         WHERE links.source = 'neighbor_table'
                                                              AND links.observed_at IS NOT NULL
                                                              AND links.observed_at >= ?
+                                                             AND (
+                                                                     links.neighbor_eui64 = nodes.eui64
+                                                                     OR links.reporter_eui64 = nodes.eui64
+                                                             )
                                                 )
                                                      THEN 'sleeping'
                        WHEN device_id IS NOT NULL THEN 'offline'
