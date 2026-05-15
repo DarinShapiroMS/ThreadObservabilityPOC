@@ -231,14 +231,45 @@ def get_latest_signal_strength(node_eui64: str, store: SQLiteStore | None = None
             "source": "links" if mode == "incoming" else "reported_links",
         }
 
+    def _pick_strongest_available(*strengths: dict[str, Any] | None) -> dict[str, Any] | None:
+        best: dict[str, Any] | None = None
+        for candidate in strengths:
+            if not candidate:
+                continue
+            if best is None:
+                best = candidate
+                continue
+            cand_rssi = candidate.get("rssi")
+            best_rssi = best.get("rssi")
+            if cand_rssi is not None and best_rssi is not None:
+                if cand_rssi > best_rssi:
+                    best = candidate
+                elif cand_rssi == best_rssi and (candidate.get("lqi") or -1) > (best.get("lqi") or -1):
+                    best = candidate
+                continue
+            if cand_rssi is not None and best_rssi is None:
+                best = candidate
+                continue
+            if cand_rssi is None and best_rssi is None and (candidate.get("lqi") or -1) > (best.get("lqi") or -1):
+                best = candidate
+        return best
+
+    def _with_strongest_available(primary: dict[str, Any], *alternates: dict[str, Any] | None) -> dict[str, Any]:
+        strongest = _pick_strongest_available(primary, *alternates)
+        out = dict(primary)
+        out["strongest_available_rssi"] = strongest.get("rssi") if strongest else None
+        out["strongest_available_lqi"] = strongest.get("lqi") if strongest else None
+        out["strongest_available_source"] = strongest.get("source") if strongest else None
+        return out
+
     # ---- prefer link-table data (Matter cluster-53) ----
     incoming = _strength_from_rows(_rows_for("neighbor_eui64"), mode="incoming")
-    if incoming:
-        return incoming
-
     reported = _strength_from_rows(_rows_for("reporter_eui64"), mode="outgoing")
+    if incoming:
+        return _with_strongest_available(incoming, reported)
+
     if reported:
-        return reported
+        return _with_strongest_available(reported)
 
     # ---- fallback: event log ----
     events = s.query_events(eui64=node_eui64, limit=100)
@@ -249,6 +280,9 @@ def get_latest_signal_strength(node_eui64: str, store: SQLiteStore | None = None
         "lqi": lqi_samples[0] if lqi_samples else None,
         "rssi_avg": sum(rssi_samples) // len(rssi_samples) if rssi_samples else None,
         "lqi_avg": sum(lqi_samples) // len(lqi_samples) if lqi_samples else None,
+        "strongest_available_rssi": rssi_samples[0] if rssi_samples else None,
+        "strongest_available_lqi": lqi_samples[0] if lqi_samples else None,
+        "strongest_available_source": "events" if rssi_samples or lqi_samples else None,
         "best_reporter": None,
         "neighbors": [],
         "source": "events" if rssi_samples or lqi_samples else None,
@@ -364,9 +398,9 @@ def _build_sed_mesh_state(s: SQLiteStore) -> dict[str, dict[str, Any]]:
     parents the SED reports it via its ``NeighborTable`` regardless of
     whether the sleepy has anything to say.
 
-    This helper joins those two views: for every link row where
-    ``is_child=1``, the (parent_reporter, child_neighbor) pair is evidence
-    the parent claimed this SED within the last topology poll. We expose:
+    This helper joins those two views: any recent ``neighbor_table`` row for
+    a sleepy device is evidence some router still sees it on-mesh, even when
+    the upstream source omitted the explicit ``is_child=1`` marker. We expose:
 
       ``mesh_alive`` (bool)            — at least one parent claims the
                                          child within
@@ -387,7 +421,7 @@ def _build_sed_mesh_state(s: SQLiteStore) -> dict[str, dict[str, Any]]:
         rows = s._conn.execute(  # noqa: SLF001
             "SELECT neighbor_eui64, MAX(observed_at) AS latest"
             "  FROM links"
-            " WHERE is_child = 1 AND source = 'neighbor_table'"
+            " WHERE source = 'neighbor_table'"
             "   AND neighbor_eui64 IS NOT NULL"
             " GROUP BY neighbor_eui64"
         ).fetchall()

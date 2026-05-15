@@ -138,6 +138,30 @@ def test_get_latest_signal_strength_falls_back_to_reported_router_links(store) -
     assert [row["eui64"] for row in strength["neighbors"]] == [peer_b, peer_a]
 
 
+def test_get_latest_signal_strength_keeps_display_source_but_tracks_strongest_available_link(store) -> None:
+    router = "10" * 8
+    incoming_peer = "20" * 8
+    outgoing_peer = "30" * 8
+    store.upsert_node_metadata(eui64=router, friendly_name="Router A")
+    store.upsert_node_metadata(eui64=incoming_peer, friendly_name="Incoming Peer")
+    store.upsert_node_metadata(eui64=outgoing_peer, friendly_name="Outgoing Peer")
+
+    store.replace_links_for_reporter(incoming_peer, "neighbor_table", [
+        {"neighbor_eui64": router, "rssi_avg": -82, "lqi_in": 2, "is_child": False},
+    ])
+    store.replace_links_for_reporter(router, "neighbor_table", [
+        {"neighbor_eui64": outgoing_peer, "rssi_avg": -60, "lqi_out": 3, "is_child": False},
+    ])
+
+    strength = nodes.get_latest_signal_strength(router, store=store)
+
+    assert strength["source"] == "links"
+    assert strength["rssi"] == -82
+    assert strength["strongest_available_rssi"] == -60
+    assert strength["strongest_available_lqi"] == 3
+    assert strength["strongest_available_source"] == "reported_links"
+
+
 def test_list_nodes_enriched_infers_sed_parent_from_strongest_peer(store) -> None:
     child = "dd" * 8
     parent = "ee" * 8
@@ -155,6 +179,24 @@ def test_list_nodes_enriched_infers_sed_parent_from_strongest_peer(store) -> Non
     assert enriched[child]["parent_eui64"] == parent
     assert enriched[child]["parent_name"] == "Hall Router"
     assert enriched[child]["parent_inferred"] is True
+
+
+def test_list_nodes_enriched_marks_sed_mesh_alive_without_is_child(store) -> None:
+    child = "ab" * 8
+    parent = "cd" * 8
+
+    store.upsert_node_metadata(eui64=child, friendly_name="Window Shade", device_id="shade-2")
+    store.upsert_node_metadata(eui64=parent, friendly_name="Hall Router")
+    store.set_node_diagnostics(child, routing_role="sleepy_end_device")
+    store.set_node_diagnostics(parent, routing_role="router")
+    store.replace_links_for_reporter(parent, "neighbor_table", [
+        {"neighbor_eui64": child, "rssi_avg": -62, "lqi_in": 3},
+    ])
+
+    enriched = {n["eui64"]: n for n in nodes.list_nodes_enriched(store=store, include_signal_strength=True)}
+
+    assert enriched[child]["mesh_alive"] is True
+    assert enriched[child]["sed_classification"] == "fresh"
 
 
 def _setup_three_router_partition(store) -> tuple[str, str, str]:

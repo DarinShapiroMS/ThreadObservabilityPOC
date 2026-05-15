@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.42 — Live validation follow-up
+
+This patch fixes the remaining live gaps found immediately after the 0.11.41 rollout.
+
+**Fixes:**
+- treats recent neighbor-table sightings as mesh-alive evidence for sleepy end
+  devices even when the upstream source omitted the explicit `is_child` flag
+- keeps sleepy devices with an inferred current peer in the `sleeping` state
+  instead of showing them as offline when the mesh still sees them
+- computes the Network hot-spot card from the strongest known link available
+  for each node instead of reusing the display-preferred signal direction
+- adds regression coverage for the missing-`is_child` ingestion shape seen in
+  live data and for mixed-direction link rollups that previously misranked the
+  hot-spot card
+
 ## 0.11.41 — Hot spot and sleepy-device status fixes
 
 This patch packages the validated fixes for issues 104 and 105.

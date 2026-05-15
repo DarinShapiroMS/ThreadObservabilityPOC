@@ -934,8 +934,12 @@ function deltaForNode(eui, window, counter) {
 
 function strongestAvailableLink(node) {
   const sig = (node && node.signal_strength) || {};
-  const rssi = typeof sig.rssi === 'number' ? sig.rssi : null;
-  const lqi = typeof sig.lqi === 'number' ? sig.lqi : null;
+  const rssi = typeof sig.strongest_available_rssi === 'number'
+    ? sig.strongest_available_rssi
+    : (typeof sig.rssi === 'number' ? sig.rssi : null);
+  const lqi = typeof sig.strongest_available_lqi === 'number'
+    ? sig.strongest_available_lqi
+    : (typeof sig.lqi === 'number' ? sig.lqi : null);
   if (rssi == null && lqi == null) return null;
   return { rssi, lqi };
 }
