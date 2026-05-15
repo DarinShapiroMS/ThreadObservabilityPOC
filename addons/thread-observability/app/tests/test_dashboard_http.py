@@ -50,6 +50,17 @@ def test_dashboard_wires_expected_dashboard_endpoints() -> None:
     assert "v1/assessment/run-now" in html
 
 
+def test_dashboard_uses_home_assistant_theme_tokens() -> None:
+    client = TestClient(create_core_app())
+    html = client.get("/").text
+
+    assert "--primary-background-color" in html
+    assert "--ha-card-background" in html
+    assert "--primary-text-color" in html
+    assert "--secondary-text-color" in html
+    assert "--accent-color" in html
+
+
 def test_node_analysis_endpoint_exposes_peer_comparison(store) -> None:
     subject = "11" * 8
     peer = "22" * 8

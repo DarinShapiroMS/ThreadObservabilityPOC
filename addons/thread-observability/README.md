@@ -55,3 +55,8 @@ For API-surface regression without a Home Assistant deployment, run `PYTHONPATH=
 - Legacy node-shaping reference exports now live under `../../samples/addon/`. They are retained for offline inspection only and are not runtime inputs for the add-on.
 - The ad hoc OTBR parser smoke helper lives at `../../scripts/test_real_logs.py` rather than the repository root.
 - `app/src/thread_observability/pipeline/reasoner.py` intentionally retains the pre-redesign rule body as reference code while the active runtime keeps issue detection paused pending GitHub issue #5.
+
+## Ingress dashboard styling notes
+
+- The dashboard now prefers Home Assistant theme variables (for example `--primary-background-color`, `--ha-card-background`, `--primary-text-color`, `--secondary-text-color`, and `--accent-color`) so ingress surfaces track active HA light/dark themes.
+- We intentionally keep product-specific diagnostic colors for Thread role classes (Leader/Router/REED/FED/SED/phantom) and graph/risk overlays because those hues encode operational meaning across table pills, graph legend, and topology rendering.

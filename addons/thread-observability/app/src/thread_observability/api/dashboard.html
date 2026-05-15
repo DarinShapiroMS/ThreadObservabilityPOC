@@ -10,10 +10,32 @@
 <script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
 <style>
   :root {
-    --bg:#0b1220; --panel:#111a2e; --panel2:#0f172a; --border:#1f2a44;
-    --fg:#e5e7eb; --muted:#94a3b8; --accent:#60a5fa;
-    --good:#16a34a; --warn:#ca8a04; --bad:#dc2626;
-    --pill-bg:#1e293b;
+    --bg:var(--primary-background-color, #0b1220);
+    --panel:var(--ha-card-background, var(--card-background-color, #111a2e));
+    --panel2:var(--secondary-background-color, #0f172a);
+    --border:var(--divider-color, #1f2a44);
+    --fg:var(--primary-text-color, #e5e7eb);
+    --muted:var(--secondary-text-color, #94a3b8);
+    --accent:var(--accent-color, #60a5fa);
+    --good:var(--success-color, #16a34a);
+    --warn:var(--warning-color, #ca8a04);
+    --bad:var(--error-color, #dc2626);
+    --pill-bg:var(--panel2);
+    --role-leader-color:#dc2626;
+    --role-router-color:#3b82f6;
+    --role-reed-color:#14b8a6;
+    --role-fed-color:#9ca3af;
+    --role-sed-color:#8b5cf6;
+    --role-phantom-color:#475569;
+    --graph-group-bg:#0b2236;
+    --graph-group-border:#1d4ed8;
+    --graph-group-text:#93c5fd;
+    --graph-highlight-recent:#f59e0b;
+    --graph-highlight-weak:#f97316;
+    --graph-highlight-unstable:#ef4444;
+    --graph-highlight-duplicate:#22d3ee;
+    --graph-highlight-path:#facc15;
+    --graph-highlight-otbr:#22c55e;
   }
   * { box-sizing: border-box; }
   html, body { background: var(--bg); color: var(--fg); margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
@@ -25,6 +47,11 @@
   .header-chip-btn {
     background: transparent; border: 0; color: inherit; padding: 0; cursor: pointer;
     font: inherit;
+  }
+  button, select, input, textarea { font: inherit; }
+  button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   nav.tabs { display:flex; gap:2px; padding: 0 20px; border-bottom: 1px solid var(--border); background: var(--panel2); }
@@ -76,12 +103,12 @@
   .lqi-warn  { color: var(--warn); font-weight: 700; }
   .lqi-bad   { color: var(--bad);  font-weight: 700; }
 
-  .role-leader { background:#450a0a; color:#fca5a5; }
-  .role-router { background:#172554; color:#93c5fd; }
-  .role-reed   { background:#042f2e; color:#5eead4; }
-  .role-fed    { background:#1f2937; color:#d1d5db; }
-  .role-sed    { background:#2e1065; color:#c4b5fd; }
-  .role-unknown{ background:#1e293b; color:#94a3b8; }
+  .role-leader { background:var(--panel2); color:var(--role-leader-color); }
+  .role-router { background:var(--panel2); color:var(--role-router-color); }
+  .role-reed   { background:var(--panel2); color:var(--role-reed-color); }
+  .role-fed    { background:var(--panel2); color:var(--role-fed-color); }
+  .role-sed    { background:var(--panel2); color:var(--role-sed-color); }
+  .role-unknown{ background:var(--panel2); color:var(--muted); }
 
   .parent-hint { display:block; color: var(--muted); font-size: 11px; margin-top: 2px; }
 
@@ -96,7 +123,7 @@
   .graph-hover-card {
     position:absolute; z-index:30; left:0; top:0; display:none; pointer-events:none;
     max-width:320px; padding:10px 12px; border-radius:10px; border:1px solid var(--border);
-    background: rgba(11,18,32,0.96); box-shadow: 0 12px 28px rgba(0,0,0,0.35);
+    background: var(--panel); box-shadow: 0 12px 28px rgba(0,0,0,0.35);
   }
   .graph-hover-card.visible { display:block; }
   .graph-hover-card .rail-sub { margin-top: 6px; }
@@ -156,8 +183,8 @@
     display:flex; flex-direction:column; gap:10px;
   }
   .chat-msg { border-radius: 10px; padding: 10px 12px; line-height:1.5; }
-  .chat-msg.user { background:#172554; color:#dbeafe; margin-left:18px; }
-  .chat-msg.agent { background:#102239; color:#e2e8f0; margin-right:18px; }
+  .chat-msg.user { background:var(--panel2); color:var(--fg); margin-left:18px; border:1px solid var(--accent); }
+  .chat-msg.agent { background:var(--panel2); color:var(--fg); margin-right:18px; }
   .chat-msg.background-check { background:#0f2d20; color:#dcfce7; border:1px solid #166534; }
   .chat-msg-meta {
     color: var(--muted); font-size: 11px; margin-bottom: 6px; display:flex;
@@ -181,10 +208,10 @@
   }
   .suggestion-list { display:flex; flex-wrap:wrap; gap:8px; }
   .suggestion-chip {
-    background:#0b223e; color:#bfdbfe; border:1px solid #1d4ed8; border-radius:999px;
+    background:var(--panel2); color:var(--fg); border:1px solid var(--accent); border-radius:999px;
     padding:6px 10px; font-size:12px; cursor:pointer;
   }
-  .suggestion-chip:hover { background:#153962; }
+  .suggestion-chip:hover { background:var(--panel); }
   .chat-panel { margin-top:16px; }
   .history-list, .finding-list { display:flex; flex-direction:column; gap:8px; }
   .history-item, .finding-item {
@@ -266,12 +293,12 @@
     background:var(--panel2); color:var(--muted); font-size:11px; cursor:default;
   }
   .serial-chip {
-    border:1px solid #3f3f46; border-radius:999px; padding:2px 8px;
-    background:#111827; color:#d1d5db; font-size:11px; font-weight:600;
+    border:1px solid var(--border); border-radius:999px; padding:2px 8px;
+    background:var(--panel2); color:var(--fg); font-size:11px; font-weight:600;
   }
   .identity-card {
     display:none; position:absolute; z-index:20; left:0; top:calc(100% + 8px); min-width:280px;
-    background:#081120; border:1px solid var(--border); border-radius:12px; padding:12px;
+    background:var(--panel2); border:1px solid var(--border); border-radius:12px; padding:12px;
     box-shadow:0 16px 40px rgba(2,6,23,0.6);
   }
   .identity-wrap:hover .identity-card,
@@ -566,12 +593,12 @@
         </div>
       </div>
       <div class="legend">
-        <span><span class="sw" style="background:#dc2626"></span>Leader</span>
-        <span><span class="sw" style="background:#3b82f6"></span>Router</span>
-        <span><span class="sw" style="background:#14b8a6"></span>REED</span>
-        <span><span class="sw" style="background:#9ca3af"></span>End device (FED)</span>
-        <span><span class="sw" style="background:#8b5cf6"></span>Sleepy end device</span>
-        <span><span class="sw" style="background:#475569"></span>Phantom</span>
+        <span><span class="sw" style="background:var(--role-leader-color)"></span>Leader</span>
+        <span><span class="sw" style="background:var(--role-router-color)"></span>Router</span>
+        <span><span class="sw" style="background:var(--role-reed-color)"></span>REED</span>
+        <span><span class="sw" style="background:var(--role-fed-color)"></span>End device (FED)</span>
+        <span><span class="sw" style="background:var(--role-sed-color)"></span>Sleepy end device</span>
+        <span><span class="sw" style="background:var(--role-phantom-color)"></span>Phantom</span>
         <span>·</span>
         <span><span class="sw" style="background:var(--good)"></span>RSSI ≥ −70</span>
         <span><span class="sw" style="background:var(--warn)"></span>−70..−85</span>
@@ -739,6 +766,10 @@ function escapeHtml(s) {
     {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
   ));
 }
+function cssVar(name, fallback) {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
 function rssiClass(dbm) {
   if (dbm == null) return '';
   if (dbm >= -70) return 'rssi-good';
@@ -774,21 +805,21 @@ function renderNextHop(node) {
   return '<span class="parent-hint">→ OTBR via ' + target + cost + '</span>';
 }
 function roleColorForGraph(node) {
-  if (node.status === 'phantom') return '#475569';
-  if (node.routing_role === 'leader') return '#dc2626';
+  if (node.status === 'phantom') return cssVar('--role-phantom-color', '#475569');
+  if (node.routing_role === 'leader') return cssVar('--role-leader-color', '#dc2626');
   switch (node.device_kind) {
-    case 'router': return '#3b82f6';
-    case 'reed':   return '#14b8a6';
-    case 'fed':    return '#9ca3af';
-    case 'sed':    return '#8b5cf6';
-    default:       return '#64748b';
+    case 'router': return cssVar('--role-router-color', '#3b82f6');
+    case 'reed':   return cssVar('--role-reed-color', '#14b8a6');
+    case 'fed':    return cssVar('--role-fed-color', '#9ca3af');
+    case 'sed':    return cssVar('--role-sed-color', '#8b5cf6');
+    default:       return cssVar('--muted', '#64748b');
   }
 }
 function rssiEdgeColor(rssi) {
-  if (rssi == null) return '#475569';
-  if (rssi >= -70) return '#16a34a';
-  if (rssi >= -85) return '#ca8a04';
-  return '#dc2626';
+  if (rssi == null) return cssVar('--role-phantom-color', '#475569');
+  if (rssi >= -70) return cssVar('--good', '#16a34a');
+  if (rssi >= -85) return cssVar('--warn', '#ca8a04');
+  return cssVar('--bad', '#dc2626');
 }
 function compactSerial(serial) {
   if (!serial) return '';
@@ -2548,6 +2579,18 @@ async function renderGraph(options = {}) {
 
   const viewport = cy ? { zoom: cy.zoom(), pan: cy.pan() } : null;
   const elements = buildGraphElements(topo);
+  const graphText = cssVar('--fg', '#e5e7eb');
+  const graphNodeBorder = cssVar('--bg', '#0b1220');
+  const graphGroupBg = cssVar('--graph-group-bg', '#0b2236');
+  const graphGroupBorder = cssVar('--graph-group-border', '#1d4ed8');
+  const graphGroupText = cssVar('--graph-group-text', '#93c5fd');
+  const graphLeaderBorder = cssVar('--role-leader-color', '#fca5a5');
+  const graphRecent = cssVar('--graph-highlight-recent', '#f59e0b');
+  const graphWeak = cssVar('--graph-highlight-weak', '#f97316');
+  const graphUnstable = cssVar('--graph-highlight-unstable', '#ef4444');
+  const graphDuplicate = cssVar('--graph-highlight-duplicate', '#22d3ee');
+  const graphPath = cssVar('--graph-highlight-path', '#facc15');
+  const graphOtbr = cssVar('--graph-highlight-otbr', '#22c55e');
 
   if (cy) { cy.destroy(); cy = null; }
   cy = cytoscape({
@@ -2557,18 +2600,18 @@ async function renderGraph(options = {}) {
       { selector: 'node', style: {
         'background-color': 'data(color)',
         'label': 'data(label)',
-        'color': '#e5e7eb', 'font-size': 10,
+        'color': graphText, 'font-size': 10,
         'text-valign': 'bottom', 'text-margin-y': 6,
         'width': 'data(size)', 'height': 'data(size)',
-        'border-width': 1, 'border-color': '#0b1220',
+        'border-width': 1, 'border-color': graphNodeBorder,
       }},
       { selector: ':parent', style: {
-        'background-color': '#0b2236',
+        'background-color': graphGroupBg,
         'background-opacity': 0.14,
-        'border-color': '#1d4ed8',
+        'border-color': graphGroupBorder,
         'border-width': 1,
         'label': 'data(label)',
-        'color': '#93c5fd',
+        'color': graphGroupText,
         'font-size': 11,
         'text-valign': 'top',
         'text-halign': 'center',
@@ -2576,7 +2619,7 @@ async function renderGraph(options = {}) {
         'padding': 18,
       }},
       { selector: 'node[kind = "leader"]', style: {
-        'border-width': 3, 'border-color': '#fca5a5',
+        'border-width': 3, 'border-color': graphLeaderBorder,
         'font-weight': 'bold',
       }},
       { selector: 'edge[edge_class = "peer"]', style: {
@@ -2603,22 +2646,22 @@ async function renderGraph(options = {}) {
       }},
       { selector: '.path-faded', style: { 'opacity': 0.12 } },
       { selector: '.focus-muted', style: { 'opacity': 0.14 } },
-      { selector: 'node.recent-change', style: { 'border-color': '#f59e0b', 'border-width': 4 } },
-      { selector: 'edge.weak-focus', style: { 'line-color': '#f97316', 'target-arrow-color': '#f97316', 'width': 5, 'opacity': 1 } },
-      { selector: 'edge.unstable-focus', style: { 'line-style': 'dashed', 'line-color': '#ef4444', 'target-arrow-color': '#ef4444', 'width': 5, 'opacity': 1 } },
-      { selector: 'node.duplicate-focus', style: { 'border-color': '#22d3ee', 'border-width': 4 } },
+      { selector: 'node.recent-change', style: { 'border-color': graphRecent, 'border-width': 4 } },
+      { selector: 'edge.weak-focus', style: { 'line-color': graphWeak, 'target-arrow-color': graphWeak, 'width': 5, 'opacity': 1 } },
+      { selector: 'edge.unstable-focus', style: { 'line-style': 'dashed', 'line-color': graphUnstable, 'target-arrow-color': graphUnstable, 'width': 5, 'opacity': 1 } },
+      { selector: 'node.duplicate-focus', style: { 'border-color': graphDuplicate, 'border-width': 4 } },
       { selector: '.selected-focus', style: { 'opacity': 1 } },
       { selector: 'node.path-hit', style: {
-        'border-width': 4, 'border-color': '#facc15',
+        'border-width': 4, 'border-color': graphPath,
         'opacity': 1,
       }},
       { selector: 'node.path-otbr', style: {
-        'border-width': 4, 'border-color': '#22c55e',
+        'border-width': 4, 'border-color': graphOtbr,
         'opacity': 1,
       }},
       { selector: 'edge.path-hit', style: {
-        'line-color': '#facc15', 'opacity': 1, 'width': 5,
-        'target-arrow-color': '#facc15', 'z-index': 999,
+        'line-color': graphPath, 'opacity': 1, 'width': 5,
+        'target-arrow-color': graphPath, 'z-index': 999,
       }},
     ],
     layout: { name: 'preset' },
