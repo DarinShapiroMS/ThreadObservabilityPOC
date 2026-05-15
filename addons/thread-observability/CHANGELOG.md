@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.11.53 — Direct-chat prompt refinement and dead-code cleanup
+
+This patch tightens the direct-chat system prompt so multi-part questions are
+answered from a more complete evidence set, and removes leftover dead code
+from the retired deterministic fallback path.
+
+**Fixes:**
+- updates the direct-chat system prompt to gather evidence across all requested
+  dimensions before answering, rather than stopping at the first grounded
+  partial answer
+- broadens permitted `web_search` use for current Matter/Thread specifications,
+  vendor documentation, and other external protocol context when backend
+  evidence alone is not enough
+- removes unreferenced deterministic retry constants, regex bundles, and old
+  helper code left behind after the fallback-path removal
+
 ## 0.11.52 — Audit rule refinement for sparse history windows
 
 This patch tightens direct-chat auditing so the assistant does not answer a

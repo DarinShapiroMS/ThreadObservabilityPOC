@@ -25,34 +25,33 @@ from . import web_search
 _DIRECT_AGENT_PREFIX = "direct:"
 _MAX_TOOL_ROUNDS = 4
 _MAX_TOOL_CALLS = 8
-_MAX_TOOL_DEFERRAL_RETRIES = 1
-_MAX_ANSWER_VALIDATION_RETRIES = 1
-_MAX_NODE_EVIDENCE_RETRIES = 1
-_MAX_HISTORY_COMPARISON_RETRIES = 1
-_MAX_COUNTER_GROUNDING_RETRIES = 1
 _MAX_TOOL_RESULT_MESSAGE_CHARS = 3500
 _MAX_EVIDENCE_MESSAGE_CHARS = 5000
 _DEFAULT_SYSTEM_PROMPT = (
     "You are the Thread Observability Thread-network troubleshooting assistant. Answer using only the user's "
     "request, evidence gathered from available diagnostic tools, and retained backend conversation context. "
-    "Use tools when you need current mesh state, counters, history, or node-specific evidence. "
+    "Use tools proactively when current mesh state, counters, history, routing, health, or node-specific evidence is relevant. "
+    "For multi-part questions, gather evidence for each requested dimension that the available tools can cover before answering; "
+    "do not stop at a partial answer just because one slice is already grounded. "
     "Do not tell the user to run the available diagnostic tools themselves. If a relevant tool exists, call it "
     "yourself before answering. The user does not have direct access to MCP tools, functions, or internal data "
     "services. Never tell the user to call, query, check, inspect, or use those services directly; do that "
     "yourself when possible. Ask the user only for information they uniquely have or for a physical/manual action "
     "you cannot perform from the available backend evidence. "
-    "Use web_search only when outside product or protocol context is actually needed. "
+    "Use web_search when current Matter or Thread specifications, vendor documentation, or other external protocol context "
+    "is relevant and the answer is not available from backend evidence alone. "
     "Prefer a node's friendly/display name when present; on first mention include its EUI64 only when that helps "
     "disambiguate. Ground conclusions in tool output, clearly separate observed facts from hypotheses, and mention "
     "when evidence is stale or cache-aged before making a strong claim. Use correct Thread terminology: the Leader "
     "is not a mandatory forwarding hop, parent-child attachment matters for end devices, and RouteTable next-hop "
     "semantics are not generic IP routing. This is an interactive troubleshooting conversation: when multiple "
     "explanations fit the evidence, name the top hypotheses and say what tool result would distinguish them. "
-    "Gather obvious diagnostic context before asking the user to restate the problem. Prefer concise answers in "
-    "this order: what you found, why it matters, and what to do next. Do not reason from UI controls, page state, "
+    "Gather obvious diagnostic context before asking the user to restate the problem. Once you have gathered the relevant evidence, "
+    "answer concisely in this order: what you found, why it matters, and what to do next. Do not trade completeness for brevity "
+    "when the user asks for multiple dimensions of analysis. Do not reason from UI controls, page state, "
     "or view-specific labels. If a claim is not present in backend evidence, do not use it. "
-    "Be concise, practical, and explicit about "
-    "uncertainty when the available evidence is insufficient."
+    "Be concise, practical, and explicit about uncertainty only after using the relevant available tools and only when the remaining gap "
+    "cannot be closed from the available evidence."
 )
 _CHAT_TOOL_EXCLUDE: frozenset[str] = frozenset(
     {
@@ -70,38 +69,6 @@ _NODE_EUI64_RE = re.compile(r"\b([0-9a-f]{16})\b", re.IGNORECASE)
 _POTENTIAL_NODE_ID_RE = re.compile(r"\b([0-9a-f]{12,16})\b", re.IGNORECASE)
 _STRICT_EUI64_RE = re.compile(r"^[0-9a-f]{16}$", re.IGNORECASE)
 _NODE_HISTORY_WINDOW = timedelta(hours=2)
-_UNSUPPORTED_DASHBOARD_ACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bset\s+otbr\s+slug\b", re.IGNORECASE),
-    re.compile(r"\brestart\s+pipeline\b", re.IGNORECASE),
-    re.compile(r"\btoggl(?:e|ed)\b.*\bcurrent\b.*\bhistorical\b.*\bview", re.IGNORECASE),
-    re.compile(r"\bcurrent\s+and\s+historical\s+views\b", re.IGNORECASE),
-    re.compile(r"\bwarning\s+icon\b.*\bgraph\s+diagnostics\b", re.IGNORECASE),
-    re.compile(r"\bgraph\s+diagnostics\W*(?:panel|view)\b", re.IGNORECASE),
-    re.compile(r"\bweak\s+links?\s+(?:view|panel|details?)\b", re.IGNORECASE),
-    re.compile(r"\bhover\b.*\bhighlighted\s+edge\b", re.IGNORECASE),
-    re.compile(r"\bhover\b.*\bedge\b.*\blink[-\s]?quality\s+metrics\b", re.IGNORECASE),
-    re.compile(r"\bweak[_\s-]?link\s+flag\s+clears?\b", re.IGNORECASE),
-    re.compile(r"\bdiagnostics\s+panel\b.*\bweak[_\s-]?link\b", re.IGNORECASE),
-)
-_PAGE_CONTEXT_SINGLE_PARTITION_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\b(?:1|one)\s+partition\b", re.IGNORECASE),
-    re.compile(r"\bonly\s+one\s+partition\b", re.IGNORECASE),
-    re.compile(r"\bdoes\s+not\s+show\s+two\s+partitions\b", re.IGNORECASE),
-)
-_PAGE_CONTEXT_UNIFIED_NETWORK_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bsingle\s+unified\s+thread\s+network\b", re.IGNORECASE),
-    re.compile(r"\bsingle\s+thread\s+network\b", re.IGNORECASE),
-)
-_PAGE_CONTEXT_NO_OFFLINE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\b(?:0|zero)\s+offline\s+nodes?\b", re.IGNORECASE),
-    re.compile(r"\bno\s+offline\s+(?:devices|nodes?)\b", re.IGNORECASE),
-    re.compile(r"\ball\s+nodes\s+are\s+online\b", re.IGNORECASE),
-    re.compile(r"\bfully\s+operational\b", re.IGNORECASE),
-)
-_PAGE_CONTEXT_NO_STALE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\b(?:0|zero)\s+stale\s+nodes?\b", re.IGNORECASE),
-    re.compile(r"\bno\s+stale\s+(?:devices|nodes?)\b", re.IGNORECASE),
-)
 
 
 class DirectChatConfigError(ValueError):
@@ -395,15 +362,6 @@ def _looks_like_node_question(text: str) -> bool:
         or " eui64" in normalized
         or "eui-64" in normalized
     )
-
-
-def _looks_like_offline_nodes_question(text: str) -> bool:
-    normalized = " ".join(str(text or "").lower().split())
-    if not normalized:
-        return False
-    return "offline node" in normalized or "offline nodes" in normalized
-
-
 def _looks_like_history_comparison_question(text: str) -> bool:
     normalized = " ".join(str(text or "").lower().split())
     if not normalized:
@@ -439,14 +397,6 @@ def _looks_like_counter_or_rf_question(text: str) -> bool:
             "attach attempt",
         )
     )
-
-
-def _looks_like_chokepoint_question(text: str) -> bool:
-    normalized = " ".join(str(text or "").lower().split())
-    if not normalized:
-        return False
-    return any(marker in normalized for marker in ("chokepoint", "chokepoints", "bottleneck", "bottlenecks"))
-
 def _looks_like_internal_tool_request(text: str) -> bool:
     normalized = " ".join(str(text or "").lower().split())
     if not normalized:
@@ -462,15 +412,6 @@ def _looks_like_internal_tool_request(text: str) -> bool:
             "which function should i call",
         )
     )
-
-
-def _has_sufficient_node_evidence(tool_trace: list[dict[str, Any]]) -> bool:
-    names = {str(row.get("name") or "") for row in tool_trace}
-    if "analyze_node" not in names:
-        return False
-    return bool(names & {"query_history", "get_mesh_state", "start_triage", "list_all_nodes"})
-
-
 def _topology_history_is_empty(result: Any) -> bool:
     if isinstance(result, dict):
         snapshots = result.get("snapshots")
@@ -875,87 +816,6 @@ async def _force_answer_from_existing_evidence(
     }
     payload = await _post_chat_completions(target, body)
     return _extract_message_text(payload)
-
-
-async def _gather_backend_history_comparison_evidence(
-    tool_trace: list[dict[str, Any]],
-) -> dict[str, Any]:
-    now = datetime.now(tz=UTC)
-    anchor_at = now - timedelta(hours=24)
-    list_arguments = {
-        "since": (now - timedelta(hours=48)).isoformat(),
-        "until": now.isoformat(),
-        "limit": 200,
-    }
-    list_result = await _dispatch_chat_tool("list_topology_history", list_arguments)
-    tool_trace.append(
-        {
-            "id": f"backend-{uuid.uuid4()}",
-            "type": "function",
-            "name": "list_topology_history",
-            "arguments": list_arguments,
-            "result": list_result,
-        }
-    )
-    snapshots = _extract_snapshot_summaries(list_result)
-    newest = snapshots[0] if snapshots else None
-    older = None
-    for row in snapshots[1:]:
-        captured_at = _parse_iso8601(row.get("captured_at") or row.get("ts"))
-        if captured_at is not None and captured_at <= anchor_at:
-            older = row
-            break
-    if not newest or not older:
-        return {
-            "status": "insufficient_history",
-            "reason": "No distinct retained snapshot was available for the comparison anchor.",
-            "available_snapshots": snapshots[:10],
-        }
-    if newest.get("id") == older.get("id"):
-        return {
-            "status": "insufficient_history",
-            "reason": "The current and historical anchors resolved to the same snapshot.",
-            "available_snapshots": snapshots[:10],
-        }
-    diff_arguments = {
-        "snapshot_id_a": older.get("id"),
-        "snapshot_id_b": newest.get("id"),
-    }
-    diff_result = await _dispatch_chat_tool("diff_topology_history", diff_arguments)
-    tool_trace.append(
-        {
-            "id": f"backend-{uuid.uuid4()}",
-            "type": "function",
-            "name": "diff_topology_history",
-            "arguments": diff_arguments,
-            "result": diff_result,
-        }
-    )
-    return {
-        "status": "ok",
-        "current_snapshot": newest,
-        "historical_snapshot": older,
-        "diff": _compact_topology_diff(_tool_result_data(diff_result) if isinstance(_tool_result_data(diff_result), dict) else {}),
-    }
-
-
-async def _gather_backend_counter_grounding_evidence(
-    tool_trace: list[dict[str, Any]],
-) -> dict[str, Any]:
-    list_arguments = {"limit": 40}
-    list_result = await _dispatch_chat_tool("list_all_nodes", list_arguments)
-    tool_trace.append(
-        {
-            "id": f"backend-{uuid.uuid4()}",
-            "type": "function",
-            "name": "list_all_nodes",
-            "arguments": list_arguments,
-            "result": list_result,
-        }
-    )
-    return _compact_node_inventory(list_result)
-
-
 def _wants_exact_count_response(message: str) -> bool:
     normalized = " ".join(str(message or "").lower().split())
     if not normalized or "count" not in normalized:
