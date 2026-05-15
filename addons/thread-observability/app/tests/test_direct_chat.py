@@ -163,6 +163,108 @@ def test_direct_chat_turn_compacts_large_tool_results_for_prompt(monkeypatch) ->
     assert len(result["tool_calls"][0]["result"]["rows"]) == 80
 
 
+def test_direct_chat_turn_preserves_signal_strength_fields_in_node_inventory_prompt(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-signal",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "list_all_nodes",
+                                        "arguments": "{}",
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        tool_message = next(msg for msg in body["messages"] if msg.get("role") == "tool")
+        tool_payload = json.loads(tool_message["content"])
+        first_node = tool_payload["nodes"][0]
+        assert first_node["friendly_name"] == "Bedroom Sensor"
+        assert first_node["signal_strength"]["rssi"] == -88
+        assert first_node["signal_strength"]["lqi"] == 90
+        assert first_node["signal_strength"]["strongest_available_rssi"] == -88
+        assert first_node["signal_strength"]["best_reporter_name"] == "Hallway Router"
+        assert first_node["signal_strength"]["best_reporter_eui64"] == "8899aabbccddeeff"
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Bedroom Sensor has the weakest reported signal in the current node inventory.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        assert name == "list_all_nodes"
+        assert arguments == {}
+        return {
+            "count": 1,
+            "nodes": [
+                {
+                    "eui64": "0011223344556677",
+                    "friendly_name": "Bedroom Sensor",
+                    "status": "healthy",
+                    "partition_id": 1234,
+                    "signal_strength": {
+                        "rssi": -88,
+                        "lqi": 90,
+                        "strongest_available_rssi": -88,
+                        "strongest_available_lqi": 90,
+                        "best_reporter": {
+                            "eui64": "8899aabbccddeeff",
+                            "name": "Hallway Router",
+                            "rssi": -88,
+                            "lqi": 90,
+                            "is_child": True,
+                        },
+                        "source": "links",
+                    },
+                }
+            ],
+        }
+
+    async def fake_audit(*args, **kwargs):  # noqa: ANN002, ANN003
+        return direct_chat.AuditVerdict()
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+    monkeypatch.setattr(direct_chat, "_audit_answer_candidate", fake_audit)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Which of my devices have the lowest signal quality?",
+            rendered_message="User message: Which of my devices have the lowest signal quality?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == "Bedroom Sensor has the weakest reported signal in the current node inventory."
+    assert [row["name"] for row in result["tool_calls"]] == ["list_all_nodes"]
+
+
 def test_parse_tool_arguments_accepts_json_string() -> None:
     assert direct_chat._parse_tool_arguments('{"eui64":"AA"}') == {"eui64": "AA"}
 

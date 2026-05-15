@@ -476,11 +476,27 @@ def _compact_node_inventory(result: dict[str, Any]) -> dict[str, Any]:
                 "friendly_name": row.get("friendly_name") or row.get("display_name"),
                 "status": row.get("status"),
                 "partition_id": row.get("partition_id"),
+                "signal_strength": {
+                    "rssi": ((row.get("signal_strength") or {}).get("rssi") if isinstance(row.get("signal_strength"), dict) else None),
+                    "lqi": ((row.get("signal_strength") or {}).get("lqi") if isinstance(row.get("signal_strength"), dict) else None),
+                    "strongest_available_rssi": ((row.get("signal_strength") or {}).get("strongest_available_rssi") if isinstance(row.get("signal_strength"), dict) else None),
+                    "strongest_available_lqi": ((row.get("signal_strength") or {}).get("strongest_available_lqi") if isinstance(row.get("signal_strength"), dict) else None),
+                    "best_reporter_name": ((((row.get("signal_strength") or {}).get("best_reporter") or {}).get("name")) if isinstance((row.get("signal_strength") or {}).get("best_reporter"), dict) else None),
+                    "best_reporter_eui64": ((((row.get("signal_strength") or {}).get("best_reporter") or {}).get("eui64")) if isinstance((row.get("signal_strength") or {}).get("best_reporter"), dict) else None),
+                    "source": ((row.get("signal_strength") or {}).get("source") if isinstance(row.get("signal_strength"), dict) else None),
+                },
             }
             for row in nodes[:20]
             if isinstance(row, dict)
         ],
     }
+
+
+def _tool_result_for_prompt(name: str, arguments: dict[str, Any], result: Any) -> Any:
+    data = _tool_result_data(result)
+    if name == "list_all_nodes" and isinstance(data, dict) and isinstance(data.get("nodes"), list):
+        return _compact_node_inventory(data)
+    return result
 
 
 def _validate_chat_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
@@ -1197,7 +1213,10 @@ async def direct_chat_turn(
                 {
                     "role": "tool",
                     "tool_call_id": tool_call["id"],
-                    "content": _serialize_for_prompt(result, max_chars=_MAX_TOOL_RESULT_MESSAGE_CHARS),
+                    "content": _serialize_for_prompt(
+                        _tool_result_for_prompt(tool_call["name"], tool_call["arguments"], result),
+                        max_chars=_MAX_TOOL_RESULT_MESSAGE_CHARS,
+                    ),
                 }
             )
             if (

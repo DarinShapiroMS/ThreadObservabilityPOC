@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.54 — Preserve node signal evidence for direct chat
+
+This patch fixes a direct-chat regression where node inventory results were
+over-compacted before being sent back into the model, which hid the signal
+quality evidence needed to answer weak-signal questions from already gathered
+backend data.
+
+**Fixes:**
+- preserves prompt-visible `signal_strength` fields from `list_all_nodes`,
+  including RSSI, LQI, strongest available signal values, and best reporter
+  identity
+- prevents the `list_all_nodes` prompt compactor from replacing valid node
+  inventory evidence with empty summaries when the result shape does not match
+  the node inventory schema exactly
+- adds a direct-chat regression test covering the question shape `Which of my
+  devices have the lowest signal quality?`
+
 ## 0.11.53 — Direct-chat prompt refinement and dead-code cleanup
 
 This patch tightens the direct-chat system prompt so multi-part questions are
