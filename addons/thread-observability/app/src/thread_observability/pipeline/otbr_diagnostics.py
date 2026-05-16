@@ -33,10 +33,6 @@ from . import otbr_rest
 log = logging.getLogger(__name__)
 
 
-def _coerce_int(v: Any) -> int | None:
-    return coerce_int(v, allow_strings=True)
-
-
 def _extract_mac_counters(payload: dict[str, Any]) -> dict[str, int | None]:
     """Pull MAC counter fields out of a ``/diagnostics`` response.
 
@@ -56,23 +52,29 @@ def _extract_mac_counters(payload: dict[str, Any]) -> dict[str, int | None]:
             "rx_total", "rx_err", "rx_dup",
         )}
     return {
-        "tx_total": _coerce_int(
-            mc.get("IfOutUcastPkts") or mc.get("tx_total") or mc.get("TxTotal")
+        "tx_total": coerce_int(
+            mc.get("IfOutUcastPkts") or mc.get("tx_total") or mc.get("TxTotal"),
+            allow_strings=True,
         ),
-        "tx_retry": _coerce_int(
-            mc.get("IfOutRetries") or mc.get("tx_retry") or mc.get("TxRetry")
+        "tx_retry": coerce_int(
+            mc.get("IfOutRetries") or mc.get("tx_retry") or mc.get("TxRetry"),
+            allow_strings=True,
         ),
-        "tx_err": _coerce_int(
-            mc.get("IfOutErrors") or mc.get("tx_err") or mc.get("TxErrAbort")
+        "tx_err": coerce_int(
+            mc.get("IfOutErrors") or mc.get("tx_err") or mc.get("TxErrAbort"),
+            allow_strings=True,
         ),
-        "rx_total": _coerce_int(
-            mc.get("IfInUcastPkts") or mc.get("rx_total") or mc.get("RxTotal")
+        "rx_total": coerce_int(
+            mc.get("IfInUcastPkts") or mc.get("rx_total") or mc.get("RxTotal"),
+            allow_strings=True,
         ),
-        "rx_err": _coerce_int(
-            mc.get("IfInErrors") or mc.get("rx_err") or mc.get("RxErrNoFrame")
+        "rx_err": coerce_int(
+            mc.get("IfInErrors") or mc.get("rx_err") or mc.get("RxErrNoFrame"),
+            allow_strings=True,
         ),
-        "rx_dup": _coerce_int(
-            mc.get("IfInDup") or mc.get("rx_dup") or mc.get("RxDuplicated")
+        "rx_dup": coerce_int(
+            mc.get("IfInDup") or mc.get("rx_dup") or mc.get("RxDuplicated"),
+            allow_strings=True,
         ),
     }
 
@@ -115,7 +117,7 @@ async def poll_otbr_diagnostics(
             or router.get("rloc16")
             or router.get("RLOC16")
         )
-        rloc16 = _coerce_int(rloc16_raw)
+        rloc16 = coerce_int(rloc16_raw, allow_strings=True)
         if not eui or rloc16 is None:
             continue
         summary["routers_polled"] += 1

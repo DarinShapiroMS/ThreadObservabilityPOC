@@ -124,18 +124,6 @@ class SchedulerDecision:
     budget_exhausted: bool = False
 
 
-def _utc_now() -> datetime:
-    return utc_now()
-
-
-def _iso(dt: datetime) -> str:
-    return to_iso_utc(dt)
-
-
-def _parse(ts: str | None) -> datetime | None:
-    return parse_iso_datetime(ts)
-
-
 class AssessmentScheduler:
     """Pure logic + persistence wrapper. No I/O beyond the store."""
 
@@ -155,7 +143,7 @@ class AssessmentScheduler:
         row = self._store.get_assessment_schedule()
         if row is None:
             row = self._initialize(now=now)
-        self._roll_budget_if_needed(row, now=now or _utc_now())
+        self._roll_budget_if_needed(row, now=now or utc_now())
         return self._row_to_snapshot(row)
 
     def decide(
@@ -169,7 +157,7 @@ class AssessmentScheduler:
         ``force=True`` honors the daily budget but ignores cadence. If the
         feature is disabled, returns ``should_run=False`` regardless.
         """
-        now = now or _utc_now()
+        now = now or utc_now()
         row = self._store.get_assessment_schedule() or self._initialize(now=now)
         self._roll_budget_if_needed(row, now=now)
 
@@ -200,7 +188,7 @@ class AssessmentScheduler:
                 next_run_at=row.get("next_assessment_at"),
             )
 
-        next_at = _parse(row.get("next_assessment_at"))
+        next_at = parse_iso_datetime(row.get("next_assessment_at"))
         if next_at is None or now >= next_at:
             return SchedulerDecision(
                 should_run=True,
@@ -222,7 +210,7 @@ class AssessmentScheduler:
         now: datetime | None = None,
     ) -> ScheduleSnapshot:
         """Update the state machine after an assessment ran."""
-        now = now or _utc_now()
+        now = now or utc_now()
         row = self._store.get_assessment_schedule() or self._initialize(now=now)
         self._roll_budget_if_needed(row, now=now)
 
@@ -250,16 +238,16 @@ class AssessmentScheduler:
         next_assessment_at = now + timedelta(seconds=current_interval)
         budget_used = int(row.get("budget_calls_used") or 0) + 1
 
-        state_since = row.get("state_since") or _iso(now)
+        state_since = row.get("state_since") or to_iso_utc(now)
         if state != row.get("state"):
-            state_since = _iso(now)
+            state_since = to_iso_utc(now)
 
         updated = self._store.upsert_assessment_schedule(
             {
                 "state": state,
                 "state_since": state_since,
-                "last_assessment_at": _iso(now),
-                "next_assessment_at": _iso(next_assessment_at),
+                "last_assessment_at": to_iso_utc(now),
+                "next_assessment_at": to_iso_utc(next_assessment_at),
                 "consecutive_ok": consecutive_ok,
                 "consecutive_concern": consecutive_concern,
                 "current_interval_seconds": current_interval,
@@ -272,15 +260,15 @@ class AssessmentScheduler:
 
     def note_user_engaged(self, *, now: datetime | None = None) -> ScheduleSnapshot:
         """User opened the chat drawer / started triage — bump to engaged."""
-        now = now or _utc_now()
+        now = now or utc_now()
         row = self._store.get_assessment_schedule() or self._initialize(now=now)
         interval = self.config.engaged_interval_minutes * 60
         updated = self._store.upsert_assessment_schedule(
             {
                 "state": "engaged",
-                "state_since": _iso(now),
+                "state_since": to_iso_utc(now),
                 "current_interval_seconds": interval,
-                "next_assessment_at": _iso(now + timedelta(seconds=interval)),
+                "next_assessment_at": to_iso_utc(now + timedelta(seconds=interval)),
                 "reason": "user_engaged",
                 "budget_calls_used": row.get("budget_calls_used", 0),
                 "budget_window_start_at": row.get("budget_window_start_at"),
@@ -291,16 +279,16 @@ class AssessmentScheduler:
     def set_enabled(self, enabled: bool, *, now: datetime | None = None) -> ScheduleSnapshot:
         """Runtime enable/disable (e.g., from the switch entity)."""
         self.config = replace(self.config, enabled=enabled)
-        now = now or _utc_now()
+        now = now or utc_now()
         row = self._store.get_assessment_schedule() or self._initialize(now=now)
         if enabled:
             interval = self.config.probation_interval_minutes * 60
             updated = self._store.upsert_assessment_schedule(
                 {
                     "state": "probation",
-                    "state_since": _iso(now),
+                    "state_since": to_iso_utc(now),
                     "current_interval_seconds": interval,
-                    "next_assessment_at": _iso(now + timedelta(seconds=interval)),
+                    "next_assessment_at": to_iso_utc(now + timedelta(seconds=interval)),
                     "consecutive_ok": 0,
                     "consecutive_concern": 0,
                     "reason": "enabled_by_user",
@@ -310,7 +298,7 @@ class AssessmentScheduler:
             updated = self._store.upsert_assessment_schedule(
                 {
                     "state": "disabled",
-                    "state_since": _iso(now),
+                    "state_since": to_iso_utc(now),
                     "next_assessment_at": None,
                     "reason": "disabled_by_user",
                 }
@@ -320,39 +308,39 @@ class AssessmentScheduler:
     # ----- internals --------------------------------------------------
 
     def _initialize(self, *, now: datetime | None = None) -> dict[str, Any]:
-        now = now or _utc_now()
+        now = now or utc_now()
         interval = self.config.probation_interval_minutes * 60
         state: SchedulerState = "probation" if self.config.enabled else "disabled"
         return self._store.upsert_assessment_schedule(
             {
                 "state": state,
-                "state_since": _iso(now),
+                "state_since": to_iso_utc(now),
                 "current_interval_seconds": interval,
-                "next_assessment_at": _iso(now + timedelta(seconds=interval))
+                "next_assessment_at": to_iso_utc(now + timedelta(seconds=interval))
                 if self.config.enabled
                 else None,
                 "consecutive_ok": 0,
                 "consecutive_concern": 0,
                 "budget_calls_used": 0,
-                "budget_window_start_at": _iso(now),
+                "budget_window_start_at": to_iso_utc(now),
                 "reason": "initial",
             }
         )
 
     def _roll_budget_if_needed(self, row: dict[str, Any], *, now: datetime) -> None:
         """Reset budget at UTC-midnight rollover."""
-        window_start = _parse(row.get("budget_window_start_at")) or now
+        window_start = parse_iso_datetime(row.get("budget_window_start_at")) or now
         if window_start.date() != now.date():
             self._store.upsert_assessment_schedule(
                 {
                     "budget_calls_used": 0,
-                    "budget_window_start_at": _iso(
+                    "budget_window_start_at": to_iso_utc(
                         now.replace(hour=0, minute=0, second=0, microsecond=0)
                     ),
                 }
             )
             row["budget_calls_used"] = 0
-            row["budget_window_start_at"] = _iso(
+            row["budget_window_start_at"] = to_iso_utc(
                 now.replace(hour=0, minute=0, second=0, microsecond=0)
             )
 
@@ -399,7 +387,7 @@ class AssessmentScheduler:
     def _row_to_snapshot(self, row: dict[str, Any]) -> ScheduleSnapshot:
         return ScheduleSnapshot(
             state=row.get("state", "probation"),
-            state_since=row.get("state_since") or _iso(_utc_now()),
+            state_since=row.get("state_since") or to_iso_utc(utc_now()),
             last_assessment_at=row.get("last_assessment_at"),
             next_assessment_at=row.get("next_assessment_at"),
             current_interval_seconds=int(row.get("current_interval_seconds") or 900),
@@ -407,7 +395,7 @@ class AssessmentScheduler:
             consecutive_concern=int(row.get("consecutive_concern") or 0),
             budget_calls_used=int(row.get("budget_calls_used") or 0),
             budget_window_start_at=row.get("budget_window_start_at")
-            or _iso(_utc_now()),
+            or to_iso_utc(utc_now()),
             daily_budget_calls=self.config.daily_budget_calls,
             reason=row.get("reason"),
             enabled=self.config.enabled and row.get("state") != "disabled",

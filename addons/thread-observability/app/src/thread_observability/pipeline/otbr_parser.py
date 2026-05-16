@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from ..utils.datetime import parse_iso_datetime
+from ..utils.datetime import parse_iso_datetime, utc_now, utc_now_iso
 
 _EUI = r"[0-9a-fA-F]{16}"
 
@@ -108,10 +108,6 @@ class ParsedEvent:
         }
 
 
-def _now_iso() -> str:
-    return datetime.now(tz=UTC).isoformat()
-
-
 def _extract_ts(line: str) -> tuple[str, str]:
     """Return (iso_ts, remainder). Falls back to now() if no leading ts."""
     for pat in _TS_PATTERNS:
@@ -122,7 +118,7 @@ def _extract_ts(line: str) -> tuple[str, str]:
         try:
             # Handle time-only format (HH:MM:SS from OTBR daemon logs)
             if len(raw) <= 8:  # Just HH:MM:SS
-                today = datetime.now(tz=UTC).date()
+                today = utc_now().date()
                 ms = m.group("ms") if "ms" in m.groupdict() else None
                 ms_str = f".{ms}" if ms else ""
                 normalised = f"{today}T{raw}{ms_str}"
@@ -143,8 +139,8 @@ def _extract_ts(line: str) -> tuple[str, str]:
                 raise ValueError("invalid timestamp")
             return dt.astimezone(UTC).isoformat(), line[m.end():]
         except ValueError:
-            return _now_iso(), line[m.end():]
-    return _now_iso(), line
+            return utc_now_iso(), line[m.end():]
+    return utc_now_iso(), line
 
 
 def parse_line(line: str) -> ParsedEvent | None:

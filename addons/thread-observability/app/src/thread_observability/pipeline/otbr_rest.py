@@ -330,13 +330,8 @@ async def fetch_otbr_diagnostics(
         return None
 
 
-def _otbr_field(entry: dict[str, Any], *keys: str) -> Any:
-    """Return the first non-None value among ``keys`` (case variants)."""
-    return first_present_field(entry, *keys)
-
-
 def _otbr_eui_from(entry: dict[str, Any]) -> str | None:
-    raw = _otbr_field(entry, "ExtAddress", "extAddress", "ext_address")
+    raw = first_present_field(entry, "ExtAddress", "extAddress", "ext_address")
     if raw is None:
         return None
     try:
@@ -346,14 +341,6 @@ def _otbr_eui_from(entry: dict[str, Any]) -> str | None:
     except Exception:  # noqa: BLE001
         return None
     return None
-
-
-def _otbr_coerce_int(v: Any) -> int | None:
-    return coerce_int(v, allow_strings=True)
-
-
-def _otbr_tri(v: Any) -> int | None:
-    return to_tristate_int(v)
 
 
 def _decode_otbr_neighbors(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -374,30 +361,51 @@ def _decode_otbr_neighbors(raw: list[dict[str, Any]] | None) -> list[dict[str, A
             continue
         out.append({
             "neighbor_eui64": eui,
-            "rssi_avg": _otbr_coerce_int(_otbr_field(entry, "AverageRssi", "averageRssi")),
-            "rssi_last": _otbr_coerce_int(_otbr_field(entry, "LastRssi", "lastRssi")),
-            "lqi_in": _otbr_coerce_int(_otbr_field(entry, "LinkQualityIn", "linkQualityIn")),
-            "lqi_out": _otbr_coerce_int(_otbr_field(entry, "LinkQualityOut", "linkQualityOut")),
-            "is_child": _otbr_tri(_otbr_field(entry, "IsChild", "isChild")),
-            "age_seconds": _otbr_coerce_int(_otbr_field(entry, "Age", "age")),
-            "frame_error_rate": _otbr_coerce_int(
-                _otbr_field(entry, "FrameErrorRate", "frameErrorRate")
+            "rssi_avg": coerce_int(
+                first_present_field(entry, "AverageRssi", "averageRssi"),
+                allow_strings=True,
             ),
-            "message_error_rate": _otbr_coerce_int(
-                _otbr_field(entry, "MessageErrorRate", "messageErrorRate")
+            "rssi_last": coerce_int(
+                first_present_field(entry, "LastRssi", "lastRssi"),
+                allow_strings=True,
             ),
-            "link_frame_counter": _otbr_coerce_int(
-                _otbr_field(entry, "LinkFrameCounter", "linkFrameCounter")
+            "lqi_in": coerce_int(
+                first_present_field(entry, "LinkQualityIn", "linkQualityIn"),
+                allow_strings=True,
             ),
-            "mle_frame_counter": _otbr_coerce_int(
-                _otbr_field(entry, "MleFrameCounter", "mleFrameCounter")
+            "lqi_out": coerce_int(
+                first_present_field(entry, "LinkQualityOut", "linkQualityOut"),
+                allow_strings=True,
             ),
-            "rx_on_when_idle": _otbr_tri(_otbr_field(entry, "RxOnWhenIdle", "rxOnWhenIdle")),
-            "full_thread_device": _otbr_tri(
-                _otbr_field(entry, "FullThreadDevice", "fullThreadDevice")
+            "is_child": to_tristate_int(first_present_field(entry, "IsChild", "isChild")),
+            "age_seconds": coerce_int(
+                first_present_field(entry, "Age", "age"),
+                allow_strings=True,
             ),
-            "full_network_data": _otbr_tri(
-                _otbr_field(entry, "FullNetworkData", "fullNetworkData")
+            "frame_error_rate": coerce_int(
+                first_present_field(entry, "FrameErrorRate", "frameErrorRate"),
+                allow_strings=True,
+            ),
+            "message_error_rate": coerce_int(
+                first_present_field(entry, "MessageErrorRate", "messageErrorRate"),
+                allow_strings=True,
+            ),
+            "link_frame_counter": coerce_int(
+                first_present_field(entry, "LinkFrameCounter", "linkFrameCounter"),
+                allow_strings=True,
+            ),
+            "mle_frame_counter": coerce_int(
+                first_present_field(entry, "MleFrameCounter", "mleFrameCounter"),
+                allow_strings=True,
+            ),
+            "rx_on_when_idle": to_tristate_int(
+                first_present_field(entry, "RxOnWhenIdle", "rxOnWhenIdle")
+            ),
+            "full_thread_device": to_tristate_int(
+                first_present_field(entry, "FullThreadDevice", "fullThreadDevice")
+            ),
+            "full_network_data": to_tristate_int(
+                first_present_field(entry, "FullNetworkData", "fullNetworkData")
             ),
         })
     return out
@@ -422,24 +430,42 @@ def _decode_otbr_routers(raw: list[dict[str, Any]] | None) -> list[dict[str, Any
             "neighbor_eui64": eui,
             "rssi_avg": None,
             "rssi_last": None,
-            "lqi_in": _otbr_coerce_int(
-                _otbr_field(entry, "LinkQualityIn", "LqiIn", "lqiIn", "linkQualityIn")
+            "lqi_in": coerce_int(
+                first_present_field(
+                    entry, "LinkQualityIn", "LqiIn", "lqiIn", "linkQualityIn"
+                ),
+                allow_strings=True,
             ),
-            "lqi_out": _otbr_coerce_int(
-                _otbr_field(entry, "LinkQualityOut", "LqiOut", "lqiOut", "linkQualityOut")
+            "lqi_out": coerce_int(
+                first_present_field(
+                    entry, "LinkQualityOut", "LqiOut", "lqiOut", "linkQualityOut"
+                ),
+                allow_strings=True,
             ),
             "is_child": None,
-            "age_seconds": _otbr_coerce_int(_otbr_field(entry, "Age", "age")),
+            "age_seconds": coerce_int(
+                first_present_field(entry, "Age", "age"),
+                allow_strings=True,
+            ),
             "frame_error_rate": None,
             "message_error_rate": None,
-            "path_cost": _otbr_coerce_int(_otbr_field(entry, "PathCost", "pathCost")),
-            "router_id": _otbr_coerce_int(_otbr_field(entry, "RouterId", "routerId")),
-            "next_hop_router_id": _otbr_coerce_int(
-                _otbr_field(entry, "NextHopRouterId", "NextHop", "nextHop", "nextHopRouterId")
+            "path_cost": coerce_int(
+                first_present_field(entry, "PathCost", "pathCost"),
+                allow_strings=True,
             ),
-            "allocated": _otbr_tri(_otbr_field(entry, "Allocated", "allocated")),
-            "link_established": _otbr_tri(
-                _otbr_field(entry, "LinkEstablished", "linkEstablished")
+            "router_id": coerce_int(
+                first_present_field(entry, "RouterId", "routerId"),
+                allow_strings=True,
+            ),
+            "next_hop_router_id": coerce_int(
+                first_present_field(
+                    entry, "NextHopRouterId", "NextHop", "nextHop", "nextHopRouterId"
+                ),
+                allow_strings=True,
+            ),
+            "allocated": to_tristate_int(first_present_field(entry, "Allocated", "allocated")),
+            "link_established": to_tristate_int(
+                first_present_field(entry, "LinkEstablished", "linkEstablished")
             ),
         })
     return out

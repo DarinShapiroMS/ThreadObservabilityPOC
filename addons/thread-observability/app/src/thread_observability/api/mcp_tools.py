@@ -72,10 +72,6 @@ def _read_addon_version() -> str:
 ADDON_VERSION = _read_addon_version()
 
 
-def _utc_now() -> str:
-    return utc_now_iso()
-
-
 def _tail_log(n: int = LOG_TAIL_LINES) -> list[str]:
     """Return up to n lines from the tail of the add-on log file."""
     candidates = [
@@ -973,6 +969,8 @@ def _meta(name: str) -> dict[str, Any]:
         cache_age_s = round(max(0.0, now_ts - float(finished_at)), 3)
 
     def _iso(v: Any) -> str | None:
+        # Intentionally broader than ``to_iso_utc`` because runner state may
+        # contain persisted epoch values or already-normalized ISO strings.
         if isinstance(v, (int, float)):
             return datetime.fromtimestamp(v, tz=UTC).isoformat()
         if isinstance(v, str):
@@ -987,7 +985,7 @@ def _meta(name: str) -> dict[str, Any]:
 
     return {
         "tool": name,
-        "as_of": _utc_now(),
+        "as_of": utc_now_iso(),
         "data_source": "persisted_state",
         "cache_age_s": cache_age_s,
         "stale_after_s": stale_after_s,
@@ -1001,6 +999,17 @@ def _meta(name: str) -> dict[str, Any]:
             "error": state.get("error"),
         },
     }
+
+
+def _redact_external_errors(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: ("Internal error" if key == "error" and isinstance(item, str) else _redact_external_errors(item))
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_external_errors(item) for item in value]
+    return value
 
 
 async def _dispatch_and_wrap(
@@ -1029,7 +1038,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 include_phantoms=include_phantoms,
             )
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "list_active_issues":
         # Mirrors /v1/issues/active. Issue detection is paused
         # pending redesign (#5); return an explicit placeholder so AI
@@ -1046,18 +1055,18 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             issues = get_store().list_active_issues()
             return {"count": len(issues), "issues": issues}
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "get_health_snapshot":
         try:
             return _build_health_snapshot()
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "close_issue":
         try:
             ok = get_store().close_issue(int(arguments["id"]))
             return {"closed": ok, "id": int(arguments["id"])}
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "get_recent_logs":
         n = min(int(arguments.get("lines", 100)), LOG_TAIL_LINES)
         lines = _tail_log(n)
@@ -1068,7 +1077,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
         try:
             return await supervisor_client.get_addon_info()
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc), "hint": "Supervisor unreachable; running outside HA?"}
+            return {"error": "Internal error", "hint": "Supervisor unreachable; running outside HA?"}
     if name == "ha_get_addon_logs":
         n = max(1, min(int(arguments.get("lines", 200)), 1000))
         slug = arguments.get("slug") or None
@@ -1082,58 +1091,58 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             )
             return {"lines": lines, "count": len(lines), "source": source, "slug": slug}
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc), "slug": slug}
+            return {"error": "Internal error", "slug": slug}
     if name == "ha_get_supervisor_logs":
         n = max(1, min(int(arguments.get("lines", 200)), 1000))
         try:
             lines = await supervisor_client.get_supervisor_logs(n)
             return {"lines": lines, "count": len(lines), "source": "supervisor:/supervisor/logs"}
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "ha_restart_addon":
         try:
             res = await supervisor_client.restart_addon()
-            return {"action": "restart", "result": res, "requested_at": _utc_now()}
+            return {"action": "restart", "result": res, "requested_at": utc_now_iso()}
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "ha_rebuild_addon":
         try:
             res = await supervisor_client.rebuild_addon()
-            return {"action": "rebuild", "result": res, "requested_at": _utc_now()}
+            return {"action": "rebuild", "result": res, "requested_at": utc_now_iso()}
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "ha_check_for_update":
         try:
             return await supervisor_client.check_for_update()
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "ha_update_addon":
         dry_run = bool(arguments.get("dry_run", False))
         try:
             res = await supervisor_client.update_addon(dry_run=dry_run)
-            return {"result": res, "requested_at": _utc_now()}
+            return {"result": res, "requested_at": utc_now_iso()}
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "ha_set_auto_update":
         enabled = bool(arguments.get("enabled", False))
         try:
             res = await supervisor_client.set_auto_update(enabled)
             return {"action": "set_auto_update", "enabled": enabled, "result": res}
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "ha_reinstall_addon":
         try:
             res = await supervisor_client.reinstall_addon("thread-observability")
-            return {"action": "reinstall", "result": res, "requested_at": _utc_now()}
+            return {"action": "reinstall", "result": res, "requested_at": utc_now_iso()}
         except Exception as exc:  # noqa: BLE001
             # Connection reset mid-uninstall is the expected success path.
             return {"action": "reinstall", "note": "connection terminated (expected)",
-                    "error": str(exc)}
+                    "error": "Internal error"}
     if name == "list_thread_datasets":
         try:
             return await supervisor_client.list_thread_datasets()
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
 
     # ---- Storage / config tools (Phase 1) ---------------------------------
     if name == "get_storage_stats":
@@ -1142,15 +1151,15 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             try:
                 ts_health = await ts_store.timeseries_health()
             except Exception as exc:  # noqa: BLE001
-                ts_health = {"backend": "unknown", "error": str(exc)}
+                ts_health = {"backend": "unknown", "error": "Internal error"}
             return {"sqlite": stats, "timeseries": ts_health}
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "get_chat_stats":
         try:
             return get_store().get_chat_turn_stats(since=arguments.get("since"))
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "query_history":
         try:
             from ..pipeline import timeline as timeline_mod
@@ -1168,7 +1177,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 limit=int(arguments.get("limit", 500)),
             )
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "get_topology_history_entry":
         try:
             sid = arguments.get("snapshot_id")
@@ -1180,7 +1189,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 )
             return snap or {"snapshot": None}
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "list_topology_history":
         try:
             snaps = get_store().list_topology_snapshots(
@@ -1190,7 +1199,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             )
             return {"snapshots": snaps, "count": len(snaps)}
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "diff_topology_history":
         try:
             from ..pipeline import topology_snapshot as ts_mod
@@ -1207,14 +1216,14 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 snapshot_id_b=int(b),
             )
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "list_playbooks":
         try:
             from ..pipeline import playbooks as pb_mod
 
             return pb_mod.list_playbooks()
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "lookup_playbook":
         try:
             from ..pipeline import playbooks as pb_mod
@@ -1225,7 +1234,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 query=arguments.get("query"),
             )
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "analyze_node":
         try:
             from ..pipeline import analyze_node as an_mod
@@ -1240,7 +1249,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 baseline_days=int(arguments.get("baseline_days", 7)),
             )
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "get_config":
         try:
             cfg = get_config()
@@ -1255,12 +1264,12 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 payload["ai"]["api_key"] = "***"
             return payload
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "get_timeseries_health":
         try:
             return await ts_store.timeseries_health()
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
 
     # ---- OTBR ingestion tools (Phase 2.5) ---------------------------------
     if name == "list_otbr_candidates":
@@ -1268,7 +1277,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             cands = await otbr_adapter.list_candidates()
             return {"count": len(cands), "candidates": cands}
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc), "candidates": []}
+            return {"error": "Internal error", "candidates": []}
     if name == "set_otbr_slug":
         try:
             slug = str(arguments.get("slug", "")).strip()
@@ -1276,18 +1285,18 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 return {"error": "slug required"}
             return otbr_adapter.set_slug(slug)
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "ingest_now":
         try:
             slug = arguments.get("slug")
             return await otbr_adapter.ingest_once(slug=slug)
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "get_ingest_state":
         try:
             return otbr_adapter.get_state()
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
 
     # ---- Node metadata tools ----------------------------------
     if name == "list_all_nodes":
@@ -1308,13 +1317,13 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                     ]
             return {"nodes": nodes, "count": len(nodes)}
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc), "nodes": []}
+            return {"error": "Internal error", "nodes": []}
     if name == "sync_ha_devices":
         try:
             from ..pipeline import device_discovery
             return await device_discovery.discover_and_sync()
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc), "matched": 0, "updated": 0}
+            return {"error": "Internal error", "matched": 0, "updated": 0}
 
     # ---- Phase 3 triage tools -----------------------------------------
     if name == "start_triage":
@@ -1322,19 +1331,19 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             from .http_api import ADDON_VERSION
             return await triage_mod.start_triage(addon_version=ADDON_VERSION)
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "get_environment":
         try:
             from .http_api import ADDON_VERSION
             return await triage_mod.get_environment(addon_version=ADDON_VERSION)
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "get_pipeline_health":
         try:
             limit = int(arguments.get("limit", 20))
             return triage_mod.get_pipeline_health(limit=limit)
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
 
     # ---- Phase 4 counter time-series tools ----------------------------
     if name == "get_counter_series":
@@ -1347,7 +1356,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 resolution=str(arguments.get("resolution") or "raw"),
             )
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "compare_node_counters":
         try:
             return counter_series_mod.compare_node_counters(
@@ -1359,7 +1368,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 resolution=str(arguments.get("resolution") or "raw"),
             )
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "get_signal_series":
         try:
             return signal_series_mod.get_signal_series(
@@ -1369,7 +1378,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 resolution=str(arguments.get("resolution") or "raw"),
             )
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
     if name == "get_node_link_signal_history":
         try:
             return link_signal_history_mod.get_node_link_signal_history(
@@ -1381,7 +1390,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 limit=int(arguments.get("limit") or 5000),
             )
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            return {"error": "Internal error"}
 
     if name == "get_assessment_state":
         from ..services.assessment.scheduler import (
@@ -1411,7 +1420,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             )
             return {"recorded": True, "feedback": rec}
         except (LookupError, ValueError) as exc:
-            return {"recorded": False, "error": str(exc)}
+            return {"recorded": False, "error": "Internal error"}
 
     if name == "get_assessment_quality":
         from ..services.assessment import feedback as feedback_mod
@@ -1473,7 +1482,7 @@ def create_mcp_app() -> FastAPI:
             except KeyError:
                 return _jsonrpc_error(req_id, -32602, f"Unknown resource: {resource_name}"), 200
             except FileNotFoundError as exc:
-                return _jsonrpc_error(req_id, -32603, str(exc)), 200
+                return _jsonrpc_error(req_id, -32603, "Internal error"), 200
             return _jsonrpc_ok(
                 req_id,
                 {
@@ -1522,7 +1531,7 @@ def create_mcp_app() -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "service": "mcp", "checked_at": _utc_now()}
+        return {"status": "ok", "service": "mcp", "checked_at": utc_now_iso()}
 
     @app.get("/mcp/tools")
     def list_tools_rest() -> dict[str, object]:
@@ -1539,8 +1548,8 @@ def create_mcp_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"Unknown resource: {resource_name}") from exc
         except FileNotFoundError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return {"resource": resource, "contents": contents, "read_at": _utc_now()}
+            raise HTTPException(status_code=500, detail="Internal error") from exc
+        return {"resource": resource, "contents": contents, "read_at": utc_now_iso()}
 
     @app.get("/mcp/sse")
     async def open_mcp_sse(request: Request) -> StreamingResponse:
@@ -1555,7 +1564,7 @@ def create_mcp_app() -> FastAPI:
                     try:
                         payload = await asyncio.wait_for(queue.get(), timeout=15.0)
                     except TimeoutError:
-                        yield _encode_sse("ping", {"ts": _utc_now()})
+                        yield _encode_sse("ping", {"ts": utc_now_iso()})
                         continue
                     yield _encode_sse("message", payload)
             finally:
@@ -1598,7 +1607,11 @@ def create_mcp_app() -> FastAPI:
         if tool_name not in _TOOL_MAP:
             raise HTTPException(status_code=404, detail=f"Unknown tool: {tool_name}")
         result = await _dispatch_and_wrap(tool_name, request.arguments)
-        return {"tool": tool_name, "result": result, "called_at": _utc_now()}
+        return {
+            "tool": tool_name,
+            "result": _redact_external_errors(result),
+            "called_at": utc_now_iso(),
+        }
 
     # ── MCP JSON-RPC 2.0 endpoint (VS Code MCP client) ───────────────────────
 

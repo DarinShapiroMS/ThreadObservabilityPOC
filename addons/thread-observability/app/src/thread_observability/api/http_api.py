@@ -316,7 +316,7 @@ def _record_chat_turn_telemetry(
     try:
         get_store().record_chat_turn_stat(
             conversation_id=conversation_id,
-            recorded_at=_utc_now(),
+            recorded_at=utc_now_iso(),
             backend=backend,
             agent_id=agent_id,
             model_name=model_name,
@@ -440,10 +440,6 @@ _CHAT_STARTER_PROMPTS_PATH = Path(__file__).parent / "chat_starter_prompts.json"
 _CHAT_KNOWN_THREAD_TOOLS = frozenset({"get_health_snapshot", "get_mesh_state", "list_active_issues", "start_triage"})
 _HA_MCP_CLIENT_URL = "http://9e5048e8-thread-observability:8100/mcp/sse"
 _HA_INTEGRATIONS_URL = "/config/integrations/dashboard"
-
-
-def _utc_now() -> str:
-    return utc_now_iso()
 
 
 def _tail_log(n: int = 80) -> list[str]:
@@ -855,14 +851,15 @@ def create_core_app() -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "service": "core", "checked_at": _utc_now()}
+        return {"status": "ok", "service": "core", "checked_at": utc_now_iso()}
 
     @app.get("/v1/health/snapshot")
     def health_snapshot() -> dict[str, object]:
         try:
             return build_health_snapshot()
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc), "computed_at": _utc_now()}
+            log.exception("health_snapshot failed")
+            return {"error": "health snapshot unavailable", "computed_at": utc_now_iso()}
 
     @app.get("/v1/issues/active")
     def list_active_issues() -> dict[str, object]:
@@ -878,20 +875,32 @@ def create_core_app() -> FastAPI:
                 "issues": [],
                 "status": "placeholder",
                 "note": ISSUES_PAUSED_NOTE,
-                "computed_at": _utc_now(),
+                "computed_at": utc_now_iso(),
             }
         try:
             issues = get_store().list_active_issues()
-            return {"count": len(issues), "issues": issues, "computed_at": _utc_now()}
+            return {"count": len(issues), "issues": issues, "computed_at": utc_now_iso()}
         except Exception as exc:  # noqa: BLE001
-            return {"count": 0, "issues": [], "error": str(exc), "computed_at": _utc_now()}
+            log.exception("list_active_issues failed")
+            return {
+                "count": 0,
+                "issues": [],
+                "error": "active issues unavailable",
+                "computed_at": utc_now_iso(),
+            }
 
     @app.get("/v1/topology")
     def topology_snapshot(include_phantoms: bool = False) -> dict[str, object]:
         try:
             return topology_mod.build_topology(include_phantoms=include_phantoms)
         except Exception as exc:  # noqa: BLE001
-            return {"nodes": [], "links": [], "error": str(exc), "computed_at": _utc_now()}
+            log.exception("topology_snapshot failed")
+            return {
+                "nodes": [],
+                "links": [],
+                "error": "topology unavailable",
+                "computed_at": utc_now_iso(),
+            }
 
     @app.get("/v1/topology/history")
     def topology_history(limit: int = 20) -> dict[str, object]:
@@ -1217,7 +1226,7 @@ def create_core_app() -> FastAPI:
         )
         return {
             "addon_version": ADDON_VERSION,
-            "checked_at": _utc_now(),
+            "checked_at": utc_now_iso(),
             "supervisor": sup,
             "health": health,
             "issues": list_active_issues(),

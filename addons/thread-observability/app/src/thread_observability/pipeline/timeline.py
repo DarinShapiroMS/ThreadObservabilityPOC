@@ -20,7 +20,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from ..storage.sqlite_store import SQLiteStore, _utc_now
+from ..storage.sqlite_store import SQLiteStore
+from ..utils.datetime import utc_now_iso
 
 
 # Canonical sources callers can ask for; "all" means union of everything.
@@ -56,7 +57,7 @@ def query_timeline(
     tables are read at all. ``limit`` caps the final merged list.
     """
     limit = max(1, min(int(limit), 5000))
-    upper = until or _utc_now()
+    upper = until or utc_now_iso()
     kind_set = set(kinds) if kinds else None
     source_set = set(sources) if sources else None
 

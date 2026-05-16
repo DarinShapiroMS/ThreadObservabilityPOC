@@ -24,10 +24,6 @@ from ..utils.datetime import parse_iso_datetime, utc_now_iso
 from . import supervisor_client
 
 
-def _utc_now_iso() -> str:
-    return utc_now_iso()
-
-
 # ---------------------------------------------------------------------------
 # Environment bundle
 # ---------------------------------------------------------------------------
@@ -256,7 +252,7 @@ async def start_triage(*, addon_version: str | None = None) -> dict[str, Any]:
     issues = get_store().list_active_issues()
     recommended = _build_recommendations(issues, health, environment)
     return {
-        "as_of": _utc_now_iso(),
+        "as_of": utc_now_iso(),
         "environment": environment,
         "health": health,
         "active_issues_count": len(issues),

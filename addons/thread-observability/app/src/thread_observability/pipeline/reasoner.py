@@ -26,6 +26,7 @@ from typing import Any
 import json
 
 from ..storage.sqlite_store import SQLiteStore, get_store
+from ..utils.datetime import to_iso_utc
 
 PARENT_CHURN_WINDOW_MIN = 30
 PARENT_CHURN_THRESHOLD = 3
@@ -86,10 +87,6 @@ ISSUES_PAUSED_NOTE = (
 )
 
 
-def _iso(dt: datetime) -> str:
-    return dt.isoformat()
-
-
 def run_reasoner(
     *,
     now: datetime | None = None,
@@ -128,11 +125,11 @@ def run_reasoner(
     skipped: list[int] = []
 
     # ---- gather raw inputs in one lock ----
-    churn_window = _iso(now_dt - timedelta(minutes=PARENT_CHURN_WINDOW_MIN))
-    attach_window = _iso(now_dt - timedelta(minutes=ATTACH_FAIL_WINDOW_MIN))
-    offline_cutoff = _iso(now_dt - timedelta(minutes=OFFLINE_THRESHOLD_MIN))
-    re_attach_window = _iso(now_dt - timedelta(minutes=RE_ATTACH_STORM_WINDOW_MIN))
-    mesh_disagree_cutoff = _iso(
+    churn_window = to_iso_utc(now_dt - timedelta(minutes=PARENT_CHURN_WINDOW_MIN))
+    attach_window = to_iso_utc(now_dt - timedelta(minutes=ATTACH_FAIL_WINDOW_MIN))
+    offline_cutoff = to_iso_utc(now_dt - timedelta(minutes=OFFLINE_THRESHOLD_MIN))
+    re_attach_window = to_iso_utc(now_dt - timedelta(minutes=RE_ATTACH_STORM_WINDOW_MIN))
+    mesh_disagree_cutoff = to_iso_utc(
         now_dt - timedelta(minutes=MESH_DISAGREEMENT_MAX_AGE_MIN)
     )
 
@@ -510,7 +507,7 @@ def run_reasoner(
         pass
 
     return {
-        "ran_at": _iso(now_dt),
+        "ran_at": to_iso_utc(now_dt),
         "opened": opened,
         "still_open": skipped,
         "closed": closed,

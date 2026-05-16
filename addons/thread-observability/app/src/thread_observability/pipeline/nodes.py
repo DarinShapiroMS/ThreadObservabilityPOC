@@ -11,11 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ..storage.sqlite_store import SQLiteStore, get_store
-from ..utils.datetime import parse_iso_datetime, utc_now_iso
-
-
-def _utc_now() -> str:
-    return utc_now_iso()
+from ..utils.datetime import parse_iso_datetime
 
 
 def _physical_identity_key(node: dict[str, Any]) -> tuple[int, int, str] | None:

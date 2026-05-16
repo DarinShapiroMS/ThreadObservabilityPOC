@@ -681,10 +681,6 @@ _MIGRATIONS: list[str] = [
 ]
 
 
-def _utc_now() -> str:
-    return utc_now_iso()
-
-
 class SQLiteStore:
     """Thin wrapper around the on-disk SQLite database."""
 
@@ -718,7 +714,7 @@ class SQLiteStore:
                 self._conn.executescript(sql)
                 self._conn.execute(
                     "INSERT OR REPLACE INTO schema_version(version, applied_at) VALUES (?, ?)",
-                    (idx, _utc_now()),
+                    (idx, utc_now_iso()),
                 )
 
     @property
@@ -751,7 +747,7 @@ class SQLiteStore:
         lqi: int | None = None,
         payload: dict[str, Any] | None = None,
     ) -> int:
-        ts = ts or _utc_now()
+        ts = ts or utc_now_iso()
         payload_json = json.dumps(payload) if payload is not None else None
         with self._tx() as conn:
             cur = conn.execute(
@@ -898,7 +894,7 @@ class SQLiteStore:
         product_id: int | None = None,
         serial_number: str | None = None,
     ) -> None:
-        now = _utc_now()
+        now = utc_now_iso()
         # Keep legacy `area` column populated with the resolved name so older
         # readers continue to work.
         legacy_area = area if area is not None else area_name
@@ -1116,7 +1112,7 @@ class SQLiteStore:
                     rx_err_no_frame_count, rx_err_sec_count,
                     rx_err_fcs_count,
                     network_name, extended_pan_id,
-                    _utc_now(), eui64,
+                    utc_now_iso(), eui64,
                 ),
             )
             return cur.rowcount > 0
@@ -1189,7 +1185,7 @@ class SQLiteStore:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    target_eui64, target_rloc16, _utc_now(), partition_id,
+                    target_eui64, target_rloc16, utc_now_iso(), partition_id,
                     mac_tx_total, mac_tx_retry, mac_tx_err,
                     mac_rx_total, mac_rx_err, mac_rx_dup,
                     json.dumps(mle_counters) if mle_counters is not None else None,
@@ -1242,7 +1238,7 @@ class SQLiteStore:
         ``start``, ``stop``, ``restart``, ``outage``. ``started_at``
         defaults to ``now()``. Returns the new row id.
         """
-        ts = started_at or _utc_now()
+        ts = started_at or utc_now_iso()
         with self._tx() as conn:
             cur = conn.execute(
                 """
@@ -1261,7 +1257,7 @@ class SQLiteStore:
         self, event_id: int, *, ended_at: str | None = None
     ) -> bool:
         """Stamp ``ended_at`` on an open event window."""
-        ts = ended_at or _utc_now()
+        ts = ended_at or utc_now_iso()
         with self._tx() as conn:
             cur = conn.execute(
                 "UPDATE observer_events SET ended_at = ?"
@@ -1293,7 +1289,7 @@ class SQLiteStore:
         reasoner to find blackouts that overlap an issue's trigger
         window.
         """
-        upper = until or _utc_now()
+        upper = until or utc_now_iso()
         with self._lock:
             rows = self._conn.execute(
                 """
@@ -1334,7 +1330,7 @@ class SQLiteStore:
         normalized snapshot content so the capture stage can skip
         writing rows when nothing has changed.
         """
-        ts = captured_at or _utc_now()
+        ts = captured_at or utc_now_iso()
         # Pull denormalized summary columns from the snapshot dict so
         # ``list_topology_snapshots`` doesn't have to parse JSON.
         node_count = int(snapshot.get("node_count") or len(snapshot.get("nodes") or []))
@@ -1474,11 +1470,13 @@ class SQLiteStore:
         finished_at = tick.get("finished_at")
 
         def _iso(v: Any) -> str:
+            # Intentionally broader than ``to_iso_utc``: pipeline state can
+            # carry epoch seconds, ISO strings, or missing timestamps.
             if isinstance(v, (int, float)):
                 return datetime.fromtimestamp(v, tz=UTC).isoformat()
             if isinstance(v, str):
                 return v
-            return _utc_now()
+            return utc_now_iso()
 
         try:
             db_size_bytes = int(self.db_path.stat().st_size)
@@ -1546,7 +1544,7 @@ class SQLiteStore:
         cleaned = {k: v for k, v in counters.items() if v is not None}
         if not cleaned:
             return False
-        ts = observed_at or _utc_now()
+        ts = observed_at or utc_now_iso()
         payload = json.dumps(cleaned, separators=(",", ":"), sort_keys=True)
         with self._tx() as conn:
             cur = conn.execute(
@@ -1763,7 +1761,7 @@ class SQLiteStore:
                     network_name, channel, channel_mask, mesh_local_prefix,
                     _j(on_mesh_prefixes), _j(external_routes),
                     _j(services), _j(br_servers),
-                    active_timestamp, _utc_now(),
+                    active_timestamp, utc_now_iso(),
                 ),
             )
 
@@ -1816,7 +1814,7 @@ class SQLiteStore:
 
         Returns the number of rows that were actually touched.
         """
-        ts = _utc_now()
+        ts = utc_now_iso()
         n = 0
         with self._tx() as conn:
             for eui in euis:
@@ -1843,7 +1841,7 @@ class SQLiteStore:
 
         Returns ``{applied, skipped}``.
         """
-        ts = _utc_now()
+        ts = utc_now_iso()
         applied = 0
         skipped = 0
         with self._tx() as conn:
@@ -1946,7 +1944,7 @@ class SQLiteStore:
         Returns ``{state: count}`` summary plus ``changed`` (number of rows
         whose status flipped this call).
         """
-        now = _utc_now()
+        now = utc_now_iso()
         offline_cutoff = (
             datetime.now(tz=UTC) - timedelta(seconds=offline_seconds)
         ).isoformat()
@@ -2160,7 +2158,7 @@ class SQLiteStore:
         race — a second concurrent sweep on the same reporter would
         otherwise destroy the evidence before we read it.
         """
-        now = observed_at or _utc_now()
+        now = observed_at or utc_now_iso()
         inserted = 0
         with self._tx() as conn:
             # Snapshot the previous neighbour set + frame counters BEFORE
@@ -2657,7 +2655,7 @@ class SQLiteStore:
         ``eui64`` already exists, that issue's id is returned and the
         evidence is merged via REPLACE (last-write-wins).
         """
-        now = _utc_now()
+        now = utc_now_iso()
         evidence_json = json.dumps(evidence) if evidence is not None else None
         with self._tx() as conn:
             if dedupe:
@@ -2687,7 +2685,7 @@ class SQLiteStore:
         with self._tx() as conn:
             cur = conn.execute(
                 "UPDATE issues SET closed_at = ? WHERE id = ? AND closed_at IS NULL",
-                (_utc_now(), issue_id),
+                (utc_now_iso(), issue_id),
             )
             return cur.rowcount > 0
 
@@ -2875,7 +2873,7 @@ class SQLiteStore:
         unified timeline to synthesize open/close events for a node or
         for the whole mesh.
         """
-        upper = until or _utc_now()
+        upper = until or utc_now_iso()
         clauses = ["opened_at <= ?", "(closed_at IS NULL OR closed_at >= ?)"]
         params: list[Any] = [upper, since]
         if eui64:
@@ -2916,7 +2914,7 @@ class SQLiteStore:
         ``fields`` is merged into the existing row (if any). ``updated_at``
         is always set to now. Returns the resulting row.
         """
-        now = _utc_now()
+        now = utc_now_iso()
         merged = {
             "state": "probation",
             "state_since": now,
@@ -2980,7 +2978,7 @@ class SQLiteStore:
         bump ``last_seen_at`` + ``seen_count`` and take the max confidence.
         Otherwise insert a new row.
         """
-        now = _utc_now()
+        now = utc_now_iso()
         ev_json = json.dumps(evidence or [])
         with self._tx() as conn:
             existing = conn.execute(
@@ -3082,7 +3080,7 @@ class SQLiteStore:
         cleared_by: str = "assessment",
     ) -> int:
         """Mark all open rows with this key as cleared. Returns count affected."""
-        now = _utc_now()
+        now = utc_now_iso()
         with self._tx() as conn:
             cur = conn.execute(
                 "UPDATE assessment_findings"
@@ -3129,7 +3127,7 @@ class SQLiteStore:
         cleared_count: int = 0,
         model_name: str | None = None,
     ) -> dict[str, Any]:
-        assessed_at = _utc_now()
+        assessed_at = utc_now_iso()
         with self._tx() as conn:
             cur = conn.execute(
                 """
@@ -3179,7 +3177,7 @@ class SQLiteStore:
 
     def is_finding_key_suppressed(self, finding_key: str, *, at: str | None = None) -> bool:
         """Return True if any dismissed row with the same key has suppress_until > now."""
-        ts = at or _utc_now()
+        ts = at or utc_now_iso()
         with self._lock:
             row = self._conn.execute(
                 "SELECT 1 FROM assessment_findings"
@@ -3198,7 +3196,7 @@ class SQLiteStore:
         finding_type: str | None = None,
         notes: str | None = None,
     ) -> dict[str, Any]:
-        now = _utc_now()
+        now = utc_now_iso()
         with self._tx() as conn:
             conn.execute(
                 """

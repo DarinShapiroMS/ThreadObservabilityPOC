@@ -239,15 +239,6 @@ def _ext_address_to_eui64(raw: Any) -> str | None:
     return _hardware_address_to_eui64(raw)
 
 
-def _field(struct: dict[str, Any], int_key: int, *str_keys: str) -> Any:
-    """Defensively read a struct field by Matter integer id or named alias."""
-    return first_present_field(struct, *str_keys, int_key=int_key)
-
-
-def _coerce_int(v: Any) -> int | None:
-    return coerce_int(v)
-
-
 def _decode_neighbor_table(raw: Any) -> list[dict[str, Any]]:
     """Decode a Matter NeighborTable attribute (cluster 53 attr 7).
 
@@ -267,29 +258,43 @@ def _decode_neighbor_table(raw: Any) -> list[dict[str, Any]]:
     for entry in raw:
         if not isinstance(entry, dict):
             continue
-        eui = _ext_address_to_eui64(_field(entry, 0, "extAddress", "ExtAddress"))
+        eui = _ext_address_to_eui64(
+            first_present_field(entry, "extAddress", "ExtAddress", int_key=0)
+        )
         if not eui:
             continue
-        is_child_raw = _field(entry, 13, "isChild", "IsChild")
-        rx_on_raw = _field(entry, 10, "rxOnWhenIdle", "RxOnWhenIdle")
-        ftd_raw = _field(entry, 11, "fullThreadDevice", "FullThreadDevice")
-        fnd_raw = _field(entry, 12, "fullNetworkData", "FullNetworkData")
+        is_child_raw = first_present_field(entry, "isChild", "IsChild", int_key=13)
+        rx_on_raw = first_present_field(entry, "rxOnWhenIdle", "RxOnWhenIdle", int_key=10)
+        ftd_raw = first_present_field(entry, "fullThreadDevice", "FullThreadDevice", int_key=11)
+        fnd_raw = first_present_field(entry, "fullNetworkData", "FullNetworkData", int_key=12)
         out.append({
             "neighbor_eui64": eui,
-            "rssi_avg": _coerce_int(_field(entry, 6, "averageRssi", "AverageRssi")),
-            "rssi_last": _coerce_int(_field(entry, 7, "lastRssi", "LastRssi")),
-            "lqi_in": _coerce_int(_field(entry, 5, "lqi", "LQI")),
+            "rssi_avg": coerce_int(
+                first_present_field(entry, "averageRssi", "AverageRssi", int_key=6)
+            ),
+            "rssi_last": coerce_int(
+                first_present_field(entry, "lastRssi", "LastRssi", int_key=7)
+            ),
+            "lqi_in": coerce_int(first_present_field(entry, "lqi", "LQI", int_key=5)),
             "lqi_out": None,
             "is_child": to_tristate_int(is_child_raw),
-            "age_seconds": _coerce_int(_field(entry, 1, "age", "Age")),
-            "frame_error_rate": _coerce_int(_field(entry, 8, "frameErrorRate", "FrameErrorRate")),
-            "message_error_rate": _coerce_int(_field(entry, 9, "messageErrorRate", "MessageErrorRate")),
+            "age_seconds": coerce_int(first_present_field(entry, "age", "Age", int_key=1)),
+            "frame_error_rate": coerce_int(
+                first_present_field(entry, "frameErrorRate", "FrameErrorRate", int_key=8)
+            ),
+            "message_error_rate": coerce_int(
+                first_present_field(entry, "messageErrorRate", "MessageErrorRate", int_key=9)
+            ),
             "path_cost": None,
             "rx_on_when_idle": to_tristate_int(rx_on_raw),
             "full_thread_device": to_tristate_int(ftd_raw),
             "full_network_data": to_tristate_int(fnd_raw),
-            "link_frame_counter": _coerce_int(_field(entry, 3, "linkFrameCounter", "LinkFrameCounter")),
-            "mle_frame_counter": _coerce_int(_field(entry, 4, "mleFrameCounter", "MleFrameCounter")),
+            "link_frame_counter": coerce_int(
+                first_present_field(entry, "linkFrameCounter", "LinkFrameCounter", int_key=3)
+            ),
+            "mle_frame_counter": coerce_int(
+                first_present_field(entry, "mleFrameCounter", "MleFrameCounter", int_key=4)
+            ),
         })
     return out
 
@@ -312,24 +317,28 @@ def _decode_route_table(raw: Any) -> list[dict[str, Any]]:
     for entry in raw:
         if not isinstance(entry, dict):
             continue
-        eui = _ext_address_to_eui64(_field(entry, 0, "extAddress", "ExtAddress"))
+        eui = _ext_address_to_eui64(
+            first_present_field(entry, "extAddress", "ExtAddress", int_key=0)
+        )
         if not eui:
             continue
-        alloc_raw = _field(entry, 8, "allocated", "Allocated")
-        est_raw = _field(entry, 9, "linkEstablished", "LinkEstablished")
+        alloc_raw = first_present_field(entry, "allocated", "Allocated", int_key=8)
+        est_raw = first_present_field(entry, "linkEstablished", "LinkEstablished", int_key=9)
         out.append({
             "neighbor_eui64": eui,
             "rssi_avg": None,
             "rssi_last": None,
-            "lqi_in": _coerce_int(_field(entry, 5, "lqiIn", "LQIIn")),
-            "lqi_out": _coerce_int(_field(entry, 6, "lqiOut", "LQIOut")),
+            "lqi_in": coerce_int(first_present_field(entry, "lqiIn", "LQIIn", int_key=5)),
+            "lqi_out": coerce_int(first_present_field(entry, "lqiOut", "LQIOut", int_key=6)),
             "is_child": None,
-            "age_seconds": _coerce_int(_field(entry, 7, "age", "Age")),
+            "age_seconds": coerce_int(first_present_field(entry, "age", "Age", int_key=7)),
             "frame_error_rate": None,
             "message_error_rate": None,
-            "path_cost": _coerce_int(_field(entry, 4, "pathCost", "PathCost")),
-            "router_id": _coerce_int(_field(entry, 2, "routerId", "RouterId")),
-            "next_hop_router_id": _coerce_int(_field(entry, 3, "nextHop", "NextHop")),
+            "path_cost": coerce_int(first_present_field(entry, "pathCost", "PathCost", int_key=4)),
+            "router_id": coerce_int(first_present_field(entry, "routerId", "RouterId", int_key=2)),
+            "next_hop_router_id": coerce_int(
+                first_present_field(entry, "nextHop", "NextHop", int_key=3)
+            ),
             "allocated": to_tristate_int(alloc_raw),
             "link_established": to_tristate_int(est_raw),
         })

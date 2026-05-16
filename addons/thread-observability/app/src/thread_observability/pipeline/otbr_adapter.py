@@ -17,13 +17,13 @@ import asyncio
 import hashlib
 import logging
 import os
-from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
 from . import otbr_parser
 from ..storage.sqlite_store import SQLiteStore, get_store
+from ..utils.datetime import utc_now_iso
 
 log = logging.getLogger(__name__)
 
@@ -36,10 +36,6 @@ _OTBR_HINTS = ("openthread", "otbr", "silabs-multiprotocol", "silabs_multiprotoc
 
 # Special key used to persist the configured slug + cursor in ingest_state.
 _STATE_KEY_PREFIX = "otbr:"
-
-
-def _now() -> str:
-    return datetime.now(tz=UTC).isoformat()
 
 
 def _token_or_raise() -> str:
@@ -97,7 +93,7 @@ def set_slug(slug: str, store: SQLiteStore | None = None) -> dict[str, Any]:
     # Reset cursor when switching add-ons.
     state["last_line_hash"] = None
     state["last_event_ts"] = None
-    state["last_run_at"] = _now()
+    state["last_run_at"] = utc_now_iso()
     state["last_error"] = None
     _write_state(s, state)
     return state
@@ -219,7 +215,7 @@ async def ingest_once(
     state = _read_state(s)
     target = slug or state.get("slug")
     summary: dict[str, Any] = {
-        "ran_at": _now(),
+        "ran_at": utc_now_iso(),
         "slug": target,
         "lines_seen": 0,
         "lines_new": 0,
