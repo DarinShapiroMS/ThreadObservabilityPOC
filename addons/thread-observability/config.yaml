@@ -10,15 +10,16 @@ startup: services
 ingress: true
 panel_icon: mdi:lan
 init: false
+apparmor: true
 homeassistant_api: true
 hassio_api: true
-hassio_role: admin
+hassio_role: manager
 ports:
-  8099/tcp: 8099
-  8100/tcp: 8100
+  8099/tcp: null
+  8100/tcp: null
 ports_description:
-  8099/tcp: Thread Mesh Detective API and UI
-  8100/tcp: Thread Mesh Detective MCP API
+  8099/tcp: Thread Mesh Detective API and UI (optional host port mapping)
+  8100/tcp: Thread Mesh Detective MCP API (optional host port mapping)
 map:
   - config:rw
   - ssl

@@ -7,7 +7,7 @@ This guide takes a Home Assistant user from a fresh Thread Mesh Detective instal
 - Home Assistant 2025.x or newer.
 - Thread Mesh Detective installed and running.
 - At least one configured Home Assistant conversation agent.
-- The MCP server exposed on port 8100 from the add-on.
+- The MCP server reachable at the add-on hostname on port 8100 (no host port mapping required).
 
 ## MCP URL
 
@@ -58,5 +58,6 @@ After the integration is added, try these checks:
 ## Notes
 
 - The add-on still supports the legacy `POST /mcp` JSON-RPC route for VS Code MCP clients.
+- If you want to connect from outside Home Assistant (for example, a LAN VS Code MCP client), map port 8100 in the add-on Network settings.
 - If the dashboard still shows the setup card after configuration, reload the dashboard and confirm that the selected Home Assistant conversation agent is the one attached to the MCP Client integration.
 - Direct chat in the add-on remains an alternative path if you do not want to route through Home Assistant's MCP Client integration.

@@ -14,6 +14,7 @@ To preserve upgrade continuity, the add-on slug remains `thread-observability` a
 - Two-process service model in one container:
   - Core API on port 8099 (`/health`, `/v1/health/snapshot`, `/v1/issues/active`, `/v1/topology`)
   - MCP server on port 8100 (`GET /mcp/tools`, `GET /mcp/resources`, `POST /mcp`, `GET /mcp/sse`, `POST /mcp/stream`)
+- Ports 8099/8100 are **in-container** service ports. Host port mapping is optional and disabled by default; ingress is the supported UI path and Home Assistant's MCP Client integration can reach the add-on hostname directly.
 - Each pipeline tick:
   - Discovers Thread nodes via OTBR / Matter Server
   - Correlates EUI-64 with HA device registry
@@ -38,7 +39,7 @@ Use the Home Assistant MCP Client integration to expose the Thread Mesh Detectiv
 First call for any new triage session:
 
 ```
-POST http://<host>:8100/mcp/call/start_triage
+POST http://9e5048e8-thread-observability:8100/mcp/call/start_triage
 Content-Type: application/json
 
 {"arguments": {}}
@@ -54,6 +55,11 @@ Returns environment + health + active issues + up to 3 `recommended_next` tool c
 4. Run tests: `cd app && PYTHONPATH=src pytest -q`.
 
 For API-surface regression without a Home Assistant deployment, run `PYTHONPATH=app/src python ../../scripts/api_surface_smoke.py` from `addons/thread-observability`.
+
+## Minimum required permissions
+
+- `hassio_role: manager` is sufficient for the Supervisor-backed tools (state/logs/restart/rebuild/store reload, etc.).
+- Self-update via MCP is supported when `ha_admin_token` is configured (it calls HA Core's `update.install` service directly).
 
 ## Repository notes
 
