@@ -130,6 +130,57 @@
       "references": []
     },
     {
+      "id": "real_partition_split",
+      "title": "Real partition split (evidence-backed)",
+      "applies_to": ["real_partition_split"],
+      "summary": "Multiple live partitions plus evidence of a device transitioning between partitions. This narrows diagnosis vs. a bare partition-count: it suggests an unstable boundary device or RF gap rather than stale IDs.",
+      "evidence_to_collect": [
+        "Issue evidence.partitions and evidence.recent_partition_changes",
+        "get_mesh_state to confirm current partition membership",
+        "diff_topology across the split window (if snapshots exist)"
+      ],
+      "remediation_steps": [
+        "Identify the device(s) in evidence.recent_partition_changes; check their placement and power stability.",
+        "Bridge the RF gap between partitions (add/relocate a router) and re-run ingest.",
+        "If partitions disagree on extended_pan_id, resolve credentials drift (re-commission the minority leader)."
+      ],
+      "references": []
+    },
+    {
+      "id": "dead_link_reference",
+      "title": "Dead-link reference (unknown neighbor EUI64)",
+      "applies_to": ["dead_link_reference"],
+      "summary": "A router references an EUI64 that is not present in the registry-backed nodes table, persisted across multiple ingestion ticks. This usually indicates a recommissioned device leaving stale neighbor/route cache entries.",
+      "evidence_to_collect": [
+        "Issue evidence.references[] (reporter, unknown neighbor, source, seen_count)",
+        "get_neighbors for the reporter router to see link_established/allocated state",
+        "list_all_nodes to confirm the neighbor truly is absent"
+      ],
+      "remediation_steps": [
+        "If the neighbor is a known physical device, re-commission it so HA registry matches the mesh identity.",
+        "Restart the reporter router to flush stale neighbor cache entries.",
+        "If references persist and the neighbor is truly gone, inspect for duplicate identities or a stuck child table."
+      ],
+      "references": []
+    },
+    {
+      "id": "route_to_otbr_unreachable",
+      "title": "Route to OTBR unreachable (loop/unknown next hop)",
+      "applies_to": ["route_to_otbr_unreachable"],
+      "summary": "Walking the next-hop chain from a router to the OTBR terminates in a loop, unknown next hop, or missing route-table entry. This points at routing-table corruption, partition mismatch, or a missing upstream neighbor relationship.",
+      "evidence_to_collect": [
+        "Issue evidence.route_walk (hops + issues)",
+        "get_mesh_state to confirm partitions and current links",
+        "get_neighbors for the router and its first upstream hop"
+      ],
+      "remediation_steps": [
+        "If the route walk reports different_partition, resolve the partition split first.",
+        "Restart the affected router to repopulate its route table.",
+        "If unknown_next_hop persists, inspect the router's neighbor table for missing upstream links and RF quality."
+      ],
+      "references": []
+    },
+    {
       "id": "sed_battery_drain",
       "title": "Sleepy-end-device unexpected battery drain",
       "applies_to": ["sed_battery_drain"],

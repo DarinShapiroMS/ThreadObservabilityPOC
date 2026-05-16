@@ -1,8 +1,8 @@
 # MCP Tools Reference
 
 This document is generated from `thread_observability.api.mcp_tools.TOOL_DEFS` and `RESOURCE_DEFS`.
-Generated at: `2026-05-14T04:53:32+00:00`
-Tool count: `41`
+Generated at: `2026-05-16T06:50:27+00:00`
+Tool count: `43`
 Resource count: `1`
 
 Shared background resource: [glossary.md](glossary.md)
@@ -19,7 +19,7 @@ Shared background resource: [glossary.md](glossary.md)
 
 ### `get_mesh_state`
 
-Use when: starting a triage session or answering 'what does the mesh look like right now?'. Returns the live Thread mesh: nodes + links + partition_id, computed deterministically from the SQLite event log and most-recent Matter discovery tick. Phantom nodes are excluded by default. Returns: {nodes:[{eui64, role, partition_id, parent_eui64, last_rssi, last_lqi, status, ...}], links:[...], partition_id, computed_at, node_count, link_count}. Caveats: derived from the latest persisted pipeline state. Check meta.cache_age_s on the response; if stale, call ingest_now to force a refresh.
+Use when: starting a triage session or answering 'what does the mesh look like right now?'. Returns the live Thread mesh: nodes + links + partition_id, computed deterministically from the latest retained Thread events and most-recent Matter discovery tick. Phantom nodes are excluded by default. Returns: {nodes:[{eui64, role, partition_id, parent_eui64, last_rssi, last_lqi, status, ...}], links:[...], partition_id, computed_at, node_count, link_count}. Caveats: derived from the latest persisted pipeline state. Check meta.cache_age_s on the response; if stale, call ingest_now to force a refresh.
 
 | Argument | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -28,7 +28,7 @@ Use when: starting a triage session or answering 'what does the mesh look like r
 
 ### `list_active_issues`
 
-Return all currently-open Thread network issues from the SQLite issues table. NOTE: Issue detection is currently paused pending a redesign of the rule set (see tracking issue #5). Until new rules ship, this tool returns an empty list with `status: "placeholder"`. Do NOT infer "all clear" from the empty list — instead, reason from the raw data (topology, partitions, links, nodes).
+Return all currently-open Thread network issues computed by deterministic rules. Each issue includes the affected EUI64 (or null for mesh-wide issues), `first_seen_at`, `last_seen_at`, a severity that reflects actionability × freshness, and an evidence payload that includes the EUIs involved and the observation that triggered it. Current rule taxonomy: `real_partition_split`, `dead_link_reference`, `route_to_otbr_unreachable`.
 
 Arguments: none
 
@@ -125,7 +125,7 @@ Arguments: none
 
 ### `get_storage_stats`
 
-Return SQLite store stats (schema version, file size, row counts per table, oldest/newest event timestamps) plus the active time-series backend.
+Return storage stats for retained network data (schema version, file size, row counts, oldest/newest event timestamps) plus the active time-series backend.
 
 Arguments: none
 
@@ -139,7 +139,7 @@ Use when: reviewing dashboard chat usage and grounding behavior without inspecti
 
 ### `query_history`
 
-Tier 4 unified timeline. Return a single newest-first stream that merges canonical events, issue open/close lifecycle, and observer (addon/OTBR/Matter Server) outage windows over a time range. Each row is normalized to {ts, source, kind, eui64?, severity?, details, ref_id} so an AI consultant can correlate Thread-side, issue-side and observer-side activity in one round-trip. Filter by eui64, kind list, or source list.
+Tier 4 unified timeline. Return a single newest-first stream that merges canonical events, issue open/close lifecycle, and observer (addon/OTBR/Matter Server) outage windows over a time range. Each row is normalized to {ts, source, kind, eui64?, severity?, details, ref_id} so an AI consultant can correlate Thread-side, issue-side and observer-side activity in one round-trip. Filter by eui64, kind list, or source list. Use this for chronology questions like what happened when, not for per-link RSSI/LQI trends or structural topology diffs. Prefer get_signal_series for per-node signal over time, get_node_link_signal_history for adjacent-link quality changes, and diff_topology_history for before/after topology structure.
 
 | Argument | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -171,7 +171,7 @@ Tier 4. List topology snapshot summaries (id, captured_at, hash, partition_id, n
 
 ### `diff_topology_history`
 
-Tier 4. Return a structured diff between two topology snapshots: added/removed nodes, per-node role/partition/parent transitions, and added/removed links. ``snapshot_id_a`` is the older / baseline, ``snapshot_id_b`` is the newer / candidate.
+Tier 4. Return a structured diff between two topology snapshots: added/removed nodes, per-node role/partition/parent transitions, and added/removed links. ``snapshot_id_a`` is the older / baseline, ``snapshot_id_b`` is the newer / candidate. Use this for structural network-change questions, not to claim that signal quality improved or degraded. For RSSI/LQI evidence use get_signal_series or get_node_link_signal_history instead.
 
 | Argument | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -212,7 +212,7 @@ Arguments: none
 
 ### `get_timeseries_health`
 
-Probe the time-series backend (Influx if configured, else SQLite fallback) and return status.
+Probe the active time-series backend and return status.
 
 Arguments: none
 
@@ -302,6 +302,30 @@ Use when: a node looks unhealthy and you want to know whether a peer on the same
 | `since` | `string` | no | `` | ISO-8601 lower bound for both series; default 6h ago. |
 | `until` | `string` | no | `` | ISO-8601 upper bound for both series; default now. |
 | `resolution` | `string` | no | `raw` | Return raw samples or 5-minute rollups for both nodes. |
+
+### `get_signal_series`
+
+Use when: you need before/after per-device signal evidence over time, such as whether a node's RSSI or LQI got better or worse across a troubleshooting window. Returns event-backed RSSI/LQI samples for one node over [since, until], plus summary metrics (first, last, delta, min, max, avg). Use this for one node's own observed signal samples, not for peer-by-peer adjacent-link comparison. Caveats: event-driven telemetry only; sparse series mean the backend did not observe signal-bearing events in that window. If the question is which peer or link improved, degraded, appeared, or disappeared over time, prefer get_node_link_signal_history.
+
+| Argument | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `eui64` | `string` | yes | `` | Target node EUI-64 whose signal series should be returned. |
+| `since` | `string` | no | `` | ISO-8601 lower bound; default 24h ago. |
+| `until` | `string` | no | `` | ISO-8601 upper bound; default now. |
+| `resolution` | `string` | no | `raw` | Return raw event samples or 5-minute averages. |
+
+### `get_node_link_signal_history`
+
+Use when: you need retained historical link-by-link signal changes for one node across pipeline observations. Returns adjacent-link history over [since, until], including added/changed/heartbeat/removed samples and per-link RSSI/LQI summaries. Prefer this for network-change questions about which links or peers improved or degraded over time. Use this instead of get_signal_series when the question is about adjacent peers, link appearance/disappearance, or per-link quality change rather than one node's event-backed signal samples.
+
+| Argument | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `eui64` | `string` | yes | `` | Target node EUI-64 whose adjacent-link history should be returned. |
+| `since` | `string` | no | `` | ISO-8601 lower bound; default 24h ago. |
+| `until` | `string` | no | `` | ISO-8601 upper bound; default now. |
+| `peer_eui64` | `string` | no | `` | Optional peer EUI-64 to limit history to one adjacent link. |
+| `source` | `string` | no | `` | Optional source filter. |
+| `limit` | `integer` | no | `5000` | Maximum historical samples to scan. |
 
 ### `get_assessment_state`
 

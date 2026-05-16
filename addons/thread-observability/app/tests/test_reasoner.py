@@ -1,384 +1,142 @@
-"""Tests for the deterministic anomaly reasoner."""
+"""Tests for the redesigned deterministic issues reasoner."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
-from thread_observability.pipeline import reasoner as reasoner_mod
 from thread_observability.pipeline.reasoner import (
-    ATTACH_FAIL_THRESHOLD,
-    MESH_DISAGREEMENT_PCT_THRESHOLD,
-    OFFLINE_THRESHOLD_MIN,
-    PARENT_CHURN_THRESHOLD,
-    RE_ATTACH_STORM_MIN_EVENTS,
-    RE_ATTACH_STORM_MIN_REPORTERS,
+    DEAD_LINK_MIN_TICKS,
+    PARTITION_CHANGE_WINDOW_MIN,
     run_reasoner,
 )
 from thread_observability.storage.sqlite_store import SQLiteStore
-
-
-@pytest.fixture(autouse=True)
-def _unpause_reasoner(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Issue detection is paused globally (see #4/#5) but these tests
-    cover the rule implementations themselves, so we override the
-    pause flag for the duration of this file. The rules are preserved
-    behind the pause so the redesign can re-enable them incrementally.
-    """
-    monkeypatch.setattr(reasoner_mod, "ISSUES_PAUSED", False)
 
 
 def _now() -> datetime:
     return datetime.now(tz=UTC)
 
 
-def test_reasoner_no_events(store: SQLiteStore) -> None:
+def test_reasoner_no_observations(store: SQLiteStore) -> None:
     out = run_reasoner(store=store)
     assert out["opened"] == []
     assert out["closed"] == []
     assert store.list_active_issues() == []
 
 
-def test_parent_churn_opens_issue(store: SQLiteStore) -> None:
-    eui = "11" * 8
-    for i in range(PARENT_CHURN_THRESHOLD):
-        store.insert_event(
-            eui64=eui,
-            type="parent_change",
-            ts=(_now() - timedelta(minutes=i)).isoformat(),
-            parent_eui64="aa" * 8,
-        )
-    out = run_reasoner(store=store)
-    assert len(out["opened"]) == 1
-    issues = store.list_active_issues()
-    assert len(issues) == 1
-    assert issues[0]["kind"] == "parent_churn"
-    assert issues[0]["eui64"] == eui
-    assert issues[0]["evidence"]["count"] == PARENT_CHURN_THRESHOLD
+def test_dead_link_reference_requires_persistence(store: SQLiteStore) -> None:
+    reporter = "aa" * 8
+    unknown = "bb" * 8
+    store.upsert_node_metadata(eui64=reporter)
 
+    # Unknown neighbor reference appears in the current snapshot.
+    store.replace_links_for_reporter(
+        reporter,
+        "neighbor_table",
+        [{"neighbor_eui64": unknown, "link_established": True}],
+        partition_id=1,
+        observed_at=_now().isoformat(),
+    )
 
-def test_parent_churn_dedup(store: SQLiteStore) -> None:
-    eui = "11" * 8
-    for i in range(PARENT_CHURN_THRESHOLD + 1):
-        store.insert_event(eui64=eui, type="parent_change",
-                           ts=(_now() - timedelta(minutes=i)).isoformat(),
-                           parent_eui64="aa" * 8)
+    for _ in range(DEAD_LINK_MIN_TICKS - 1):
+        run_reasoner(store=store)
+        assert not any(i["kind"] == "dead_link_reference" for i in store.list_active_issues())
+
     run_reasoner(store=store)
-    second = run_reasoner(store=store)
-    assert second["opened"] == []
-    assert len(second["still_open"]) == 1
-    assert len(store.list_active_issues()) == 1
+    issues = [i for i in store.list_active_issues() if i["kind"] == "dead_link_reference"]
+    assert len(issues) == 1
+    assert issues[0]["eui64"] == reporter
+    refs = issues[0]["evidence"]["references"]
+    assert any(r.get("neighbor_eui64") == unknown for r in refs)
 
-
-def test_attach_failures_open_and_close(store: SQLiteStore) -> None:
-    eui = "22" * 8
-    for i in range(ATTACH_FAIL_THRESHOLD):
-        store.insert_event(eui64=eui, type="attach_failed",
-                           ts=(_now() - timedelta(minutes=i)).isoformat())
-    first = run_reasoner(store=store)
-    assert len(first["opened"]) == 1
-    issue_id = first["opened"][0]
-
-    # Advance time so the failure events fall outside the window;
-    # rerun and confirm the attach_failures issue auto-closes. (The node
-    # will also flip to offline in that future, which is correct behaviour.)
-    far_future = _now() + timedelta(hours=2)
-    closed = run_reasoner(store=store, now=far_future)
-    assert issue_id in closed["closed"]
-    still_open = store.list_active_issues()
-    assert all(i["kind"] != "attach_failures" for i in still_open)
-
-
-def test_offline_node_opens_crit_issue(store: SQLiteStore) -> None:
-    eui = "33" * 8
-    old = (_now() - timedelta(minutes=OFFLINE_THRESHOLD_MIN + 5)).isoformat()
-    # Registry-first (v9): event ingestion no longer auto-creates node
-    # rows. Seed the node first so insert_event can UPDATE its last_seen.
-    store.upsert_node_metadata(eui64=eui)
-    store.insert_event(eui64=eui, type="attach", ts=old)
+    # Clearing predicate: remove the unknown reference, then re-run.
+    store.replace_links_for_reporter(
+        reporter,
+        "neighbor_table",
+        [],
+        partition_id=1,
+        observed_at=_now().isoformat(),
+    )
     out = run_reasoner(store=store)
-    assert len(out["opened"]) == 1
-    issues = store.list_active_issues()
-    assert issues[0]["kind"] == "offline_node"
+    assert out["closed"]
+    assert not any(i["kind"] == "dead_link_reference" for i in store.list_active_issues())
+
+
+def test_route_to_otbr_unreachable_opens_on_unknown_next_hop(store: SQLiteStore) -> None:
+    otbr = "11" * 8
+    router = "22" * 8
+    store.upsert_node_metadata(eui64=otbr, role="border_router")
+    store.upsert_node_metadata(eui64=router)
+    store.set_node_diagnostics(otbr, partition_id=1, routing_role="leader")
+    store.set_node_diagnostics(router, partition_id=1, routing_role="router")
+    store.set_node_router_id(otbr, 1)
+    store.set_node_router_id(router, 2)
+
+    # RouteTable entry points to a router_id that doesn't exist in the
+    # partition's router index → unknown_next_hop.
+    store.replace_links_for_reporter(
+        router,
+        "route_table",
+        [
+            {
+                "neighbor_eui64": otbr,
+                "path_cost": 2,
+                "next_hop_router_id": 10,
+                "link_established": True,
+            }
+        ],
+        partition_id=1,
+        observed_at=_now().isoformat(),
+    )
+
+    run_reasoner(store=store)
+    issues = [i for i in store.list_active_issues() if i["kind"] == "route_to_otbr_unreachable"]
+    assert len(issues) == 1
+    assert issues[0]["eui64"] == router
     assert issues[0]["severity"] == "crit"
 
-
-# ---------------------------------------------------------------------------
-# v0.9.43 — Tier 2 rules
-# ---------------------------------------------------------------------------
-
-
-def test_re_attach_storm_requires_multiple_reporters(store: SQLiteStore) -> None:
-    """A single reporter shouldn't trip the storm rule no matter the count.
-
-    The whole point of the cross-reporter requirement is to filter out a
-    single flaky link and reserve the alarm for a partition-wide
-    identity problem (the Foyer-Light case).
-    """
-    neighbor = "aa" * 8
-    store.upsert_node_metadata(eui64=neighbor)
-    reporter_a = "bb" * 8
-    store.upsert_node_metadata(eui64=reporter_a)
-    for _ in range(5):
-        store.insert_event(
-            eui64=neighbor,
-            type="re_attached_node",
-            payload={
-                "neighbor_eui64": neighbor,
-                "reporter_eui64": reporter_a,
-                "counter": "link_frame_counter",
-                "old_value": 100, "new_value": 1,
-            },
-        )
+    # Clear by switching to a direct route (path_cost=1 + link_established).
+    store.replace_links_for_reporter(
+        router,
+        "route_table",
+        [{"neighbor_eui64": otbr, "path_cost": 1, "link_established": True}],
+        partition_id=1,
+        observed_at=_now().isoformat(),
+    )
     out = run_reasoner(store=store)
-    assert not any(
-        i["kind"] == "re_attach_storm" for i in store.list_active_issues()
-    ), "single-reporter storm should NOT open an issue"
-    assert out["opened"] == []
+    assert out["closed"]
+    assert not any(i["kind"] == "route_to_otbr_unreachable" for i in store.list_active_issues())
 
 
-def test_re_attach_storm_opens_with_distinct_reporters(store: SQLiteStore) -> None:
-    neighbor = "aa" * 8
-    store.upsert_node_metadata(eui64=neighbor)
-    reporters = [f"{i:02x}" * 8 for i in range(0xb0, 0xb0 + RE_ATTACH_STORM_MIN_REPORTERS)]
-    for r in reporters:
-        store.upsert_node_metadata(eui64=r)
-    # One event per reporter — meets MIN_EVENTS (2) and MIN_REPORTERS (2).
-    assert RE_ATTACH_STORM_MIN_EVENTS <= len(reporters)
-    for r in reporters:
-        store.insert_event(
-            eui64=neighbor,
-            type="re_attached_node",
-            payload={
-                "neighbor_eui64": neighbor,
-                "reporter_eui64": r,
-                "counter": "link_frame_counter",
-                "old_value": 100, "new_value": 1,
-            },
-        )
-    out = run_reasoner(store=store)
-    storms = [i for i in store.list_active_issues() if i["kind"] == "re_attach_storm"]
-    assert len(storms) == 1
-    assert storms[0]["eui64"] == neighbor
-    assert len(out["opened"]) == 1
-    assert sorted(storms[0]["evidence"]["distinct_reporters"]) == sorted(reporters)
+def test_real_partition_split_requires_recent_partition_change(store: SQLiteStore) -> None:
+    # Two live partitions exist.
+    leader_a = "aa" * 8
+    leader_b = "bb" * 8
+    mover = "cc" * 8
+    store.upsert_node_metadata(eui64=leader_a)
+    store.upsert_node_metadata(eui64=leader_b)
+    store.upsert_node_metadata(eui64=mover)
+    store.set_node_diagnostics(leader_a, partition_id=1, routing_role="leader")
+    store.set_node_diagnostics(leader_b, partition_id=2, routing_role="leader")
+    store.set_node_diagnostics(mover, partition_id=2, routing_role="router")
 
-
-def test_mesh_disagreement_opens_when_delta_over_threshold(store: SQLiteStore) -> None:
-    eui = "cc" * 8
-    # Seed a node with a self-reported MAC TX counter and a fresh diag ts.
-    store.upsert_node_metadata(eui64=eui)
-    # Set tx_total_count + diag_updated_at directly via the diagnostics
-    # setter used by the discovery pipeline.
-    store.set_node_diagnostics(eui, tx_total_count=1000)
-    # OTBR-witnessed value ≫ threshold below.
-    store.insert_otbr_diagnostic(
-        target_eui64=eui,
-        target_rloc16=0x4400,
-        mac_tx_total=500,  # 50% delta vs. 1000
-    )
-    assert MESH_DISAGREEMENT_PCT_THRESHOLD <= 50.0
-    run_reasoner(store=store)
-    disagreements = [
-        i for i in store.list_active_issues() if i["kind"] == "mesh_disagreement"
-    ]
-    assert len(disagreements) == 1
-    ev = disagreements[0]["evidence"]
-    assert ev["self_tx_total"] == 1000
-    assert ev["otbr_tx_total"] == 500
-    assert ev["delta_pct"] >= MESH_DISAGREEMENT_PCT_THRESHOLD
-
-
-def test_mesh_disagreement_skips_when_under_threshold(store: SQLiteStore) -> None:
-    eui = "dd" * 8
-    store.upsert_node_metadata(eui64=eui)
-    store.set_node_diagnostics(eui, tx_total_count=1000)
-    # 5% delta — well under default 25% threshold.
-    store.insert_otbr_diagnostic(target_eui64=eui, mac_tx_total=950)
-    run_reasoner(store=store)
-    assert not any(
-        i["kind"] == "mesh_disagreement" for i in store.list_active_issues()
-    )
-
-
-# ---------------------------------------------------------------------------
-# v0.9.44 — Tier 3 observer-suppression annotation
-# ---------------------------------------------------------------------------
-
-
-def test_offline_issue_downgrades_when_observer_was_down(store: SQLiteStore) -> None:
-    """A ``crit`` ``offline_node`` issue downgrades to ``warn`` and
-    carries ``suppressed_by`` evidence when an observer-side disruption
-    overlaps the (last_seen → now) trigger window.
-    """
-    eui = "ee" * 8
-    old = (_now() - timedelta(minutes=OFFLINE_THRESHOLD_MIN + 5)).isoformat()
-    store.upsert_node_metadata(eui64=eui)
-    store.insert_event(eui64=eui, type="attach", ts=old)
-
-    # Observer outage that spans the gap between last_seen and now.
-    obs_started = (_now() - timedelta(minutes=OFFLINE_THRESHOLD_MIN)).isoformat()
-    obs_ended = (_now() - timedelta(minutes=OFFLINE_THRESHOLD_MIN - 2)).isoformat()
-    store.insert_observer_event(
-        source="addon:core_matter_server",
-        kind="outage",
-        started_at=obs_started,
-        ended_at=obs_ended,
+    # Evidence: a device transitioned between partitions within the window.
+    ts = (_now() - timedelta(minutes=1)).isoformat()
+    store.insert_event(
+        eui64=mover,
+        type="partition_change",
+        ts=ts,
+        payload={"from": 1, "to": 2},
     )
 
     run_reasoner(store=store)
-    issues = [i for i in store.list_active_issues() if i["kind"] == "offline_node"]
+    issues = [i for i in store.list_active_issues() if i["kind"] == "real_partition_split"]
     assert len(issues) == 1
-    issue = issues[0]
-    assert issue["severity"] == "warn", "crit should have been downgraded"
-    assert "suppressed_by" in issue["evidence"]
-    suppressors = issue["evidence"]["suppressed_by"]
-    assert len(suppressors) == 1
-    assert suppressors[0]["source"] == "addon:core_matter_server"
-    assert suppressors[0]["kind"] == "outage"
+    assert issues[0]["eui64"] is None
+    assert any(ch.get("eui64") == mover for ch in issues[0]["evidence"]["recent_partition_changes"])
 
+    # Advance beyond the window; no recent partition_change → auto-close.
+    future = _now() + timedelta(minutes=PARTITION_CHANGE_WINDOW_MIN + 5)
+    out = run_reasoner(store=store, now=future)
+    assert out["closed"]
+    assert not any(i["kind"] == "real_partition_split" for i in store.list_active_issues())
 
-def test_offline_issue_stays_crit_when_no_observer_disruption(store: SQLiteStore) -> None:
-    """Same scenario but without an overlapping observer event — the
-    issue remains at full ``crit`` severity with no suppression.
-    """
-    eui = "ff" * 8
-    old = (_now() - timedelta(minutes=OFFLINE_THRESHOLD_MIN + 5)).isoformat()
-    store.upsert_node_metadata(eui64=eui)
-    store.insert_event(eui64=eui, type="attach", ts=old)
-
-    run_reasoner(store=store)
-    issues = [i for i in store.list_active_issues() if i["kind"] == "offline_node"]
-    assert len(issues) == 1
-    assert issues[0]["severity"] == "crit"
-    assert "suppressed_by" not in issues[0]["evidence"]
-
-
-def test_observer_event_strictly_before_trigger_does_not_suppress(
-    store: SQLiteStore,
-) -> None:
-    """An old observer event from yesterday must not suppress today's
-    issues. Suppression only applies within the trigger window plus grace.
-    """
-    eui = "ab" * 8
-    old = (_now() - timedelta(minutes=OFFLINE_THRESHOLD_MIN + 5)).isoformat()
-    store.upsert_node_metadata(eui64=eui)
-    store.insert_event(eui64=eui, type="attach", ts=old)
-
-    # An observer outage from 6 hours ago — well before last_seen.
-    long_ago_start = (_now() - timedelta(hours=6)).isoformat()
-    long_ago_end = (_now() - timedelta(hours=6, minutes=-1)).isoformat()
-    store.insert_observer_event(
-        source="addon:self", kind="restart",
-        started_at=long_ago_start, ended_at=long_ago_end,
-    )
-
-    run_reasoner(store=store)
-    issues = [i for i in store.list_active_issues() if i["kind"] == "offline_node"]
-    assert len(issues) == 1
-    assert issues[0]["severity"] == "crit"
-    assert "suppressed_by" not in issues[0]["evidence"]
-
-
-def test_reasoner_closes_stale_partition_split_when_topology_resolved(
-    store: SQLiteStore,
-) -> None:
-    """v0.9.45: the reasoner owns ``partition_split`` close-on-resolve.
-
-    When live topology shows <= 1 partition, any still-open
-    partition_split issue is stale and must be closed by the reasoner
-    even if the discovery stage never ran the close path.
-    """
-    eui = "aa" * 8
-    store.upsert_node_metadata(eui64=eui, friendly_name="X", role="router")
-    issue_id = store.open_issue(
-        kind="partition_split",
-        severity="warning",
-        eui64=None,
-        evidence={
-            "partition_count": 2,
-            "partitions": [
-                {"partition_id": 1, "members": [eui]},
-                {"partition_id": 2, "members": ["bb" * 8]},
-            ],
-        },
-    )
-    assert any(i["id"] == issue_id for i in store.list_active_issues())
-
-    result = run_reasoner(store=store)
-    assert issue_id in result["closed"]
-    assert not any(i["id"] == issue_id for i in store.list_active_issues())
-
-
-def test_wrong_network_opens_issue_for_minority(store: SQLiteStore) -> None:
-    """v0.9.46: minority extended_pan_id triggers wrong_network."""
-    majority_epid = "aaaaaaaaaaaaaaaa"
-    minority_epid = "bbbbbbbbbbbbbbbb"
-    for i, eui in enumerate(("11" * 8, "22" * 8, "33" * 8)):
-        store.upsert_node_metadata(eui64=eui, friendly_name=f"r{i}")
-        store.set_node_diagnostics(
-            eui, network_name="ha-thread-main", extended_pan_id=majority_epid,
-        )
-    minority_eui = "44" * 8
-    store.upsert_node_metadata(eui64=minority_eui, friendly_name="stray")
-    store.set_node_diagnostics(
-        minority_eui, network_name="ha-thread-old", extended_pan_id=minority_epid,
-    )
-
-    out = run_reasoner(store=store)
-    issues = [i for i in store.list_active_issues() if i["kind"] == "wrong_network"]
-    assert len(issues) == 1
-    issue = issues[0]
-    assert issue["eui64"] == minority_eui
-    ev = issue["evidence"]
-    assert ev["node_extended_pan_id"] == minority_epid
-    assert ev["modal_extended_pan_id"] == majority_epid
-    assert ev["modal_member_count"] == 3
-    assert ev["minority_member_count"] == 1
-    assert issue["id"] in out["opened"]
-
-
-def test_wrong_network_closes_when_resolved(store: SQLiteStore) -> None:
-    """Once the minority node adopts the modal EPID, the issue auto-closes."""
-    eui = "55" * 8
-    store.upsert_node_metadata(eui64=eui)
-    store.set_node_diagnostics(eui, extended_pan_id="bbbbbbbbbbbbbbbb")
-    for other in ("66" * 8, "77" * 8):
-        store.upsert_node_metadata(eui64=other)
-        store.set_node_diagnostics(other, extended_pan_id="aaaaaaaaaaaaaaaa")
-    run_reasoner(store=store)
-    active = [i for i in store.list_active_issues() if i["kind"] == "wrong_network"]
-    assert len(active) == 1
-    issue_id = active[0]["id"]
-
-    # Minority node re-attached on the right network.
-    store.set_node_diagnostics(eui, extended_pan_id="aaaaaaaaaaaaaaaa")
-    out = run_reasoner(store=store)
-    assert issue_id in out["closed"]
-
-
-def test_wrong_network_no_issue_when_all_match(store: SQLiteStore) -> None:
-    """Sanity: a healthy mesh on one EPID must not fire wrong_network."""
-    for eui in ("11" * 8, "22" * 8, "33" * 8):
-        store.upsert_node_metadata(eui64=eui)
-        store.set_node_diagnostics(eui, extended_pan_id="aaaaaaaaaaaaaaaa")
-    run_reasoner(store=store)
-    assert not [i for i in store.list_active_issues() if i["kind"] == "wrong_network"]
-
-
-def test_run_reasoner_paused_closes_residuals_and_returns_status(
-    store: SQLiteStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Issue detection paused (#4): residual open issues are closed
-    and the summary carries ``status: "paused"`` plus a note. The
-    rules are not evaluated."""
-    # Seed an open issue, then enable pause and re-run.
-    issue_id = store.open_issue(kind="parent_churn", severity="warn", eui64="aa" * 8)
-    monkeypatch.setattr(reasoner_mod, "ISSUES_PAUSED", True)
-    out = run_reasoner(store=store)
-    assert out["status"] == "paused"
-    assert out["opened"] == []
-    assert issue_id in out["closed"]
-    assert store.list_active_issues() == []
-    assert "note" in out and out["note"]

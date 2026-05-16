@@ -678,11 +678,55 @@ _MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_link_signal_samples_link_ts
         ON link_signal_samples(reporter_eui64, neighbor_eui64, source, observed_at DESC);
     """,
+    # v28 (issues redesign): track first/last seen timestamps per issue so
+    # callers can reason about freshness and rules can compute severity as a
+    # function of actionability × recency.
+    """
+    ALTER TABLE issues ADD COLUMN first_seen_at TEXT;
+    ALTER TABLE issues ADD COLUMN last_seen_at  TEXT;
+    CREATE INDEX IF NOT EXISTS idx_issues_last_seen
+        ON issues(closed_at, last_seen_at);
+
+    -- Backfill for existing rows created before the redesign.
+    UPDATE issues SET first_seen_at = opened_at WHERE first_seen_at IS NULL;
+    UPDATE issues
+        SET last_seen_at = COALESCE(closed_at, opened_at)
+        WHERE last_seen_at IS NULL;
+    """,
+    # v29 (issues redesign): observation accumulator for rules that require
+    # persistence across multiple ingestion ticks before surfacing an issue.
+    """
+    CREATE TABLE IF NOT EXISTS issue_observations (
+        obs_key       TEXT PRIMARY KEY,
+        kind          TEXT NOT NULL,
+        subject_eui64 TEXT,
+        first_seen_at TEXT NOT NULL,
+        last_seen_at  TEXT NOT NULL,
+        seen_count    INTEGER NOT NULL DEFAULT 1,
+        payload_json  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_issue_observations_kind
+        ON issue_observations(kind, last_seen_at DESC);
+    """,
 ]
 
 
 def _utc_now() -> str:
     return utc_now_iso()
+
+
+def _normalize_issue_severity(severity: str) -> str:
+    """Normalize severity strings to the small stable set the UI expects."""
+    s = str(severity or "").strip().lower()
+    if s in {"warning", "warn"}:
+        return "warn"
+    if s in {"critical", "crit", "bad", "error"}:
+        return "crit"
+    if s in {"info", "informational"}:
+        return "info"
+    # Default to warn so new severities don't silently drop out of
+    # health/dashboard severity buckets.
+    return "warn"
 
 
 class SQLiteStore:
@@ -2658,6 +2702,7 @@ class SQLiteStore:
         evidence is merged via REPLACE (last-write-wins).
         """
         now = _utc_now()
+        severity = _normalize_issue_severity(severity)
         evidence_json = json.dumps(evidence) if evidence is not None else None
         with self._tx() as conn:
             if dedupe:
@@ -2671,23 +2716,30 @@ class SQLiteStore:
                     existing_id = int(row[0])
                     if evidence_json is not None:
                         conn.execute(
-                            "UPDATE issues SET evidence_json = ?, severity = ?"
+                            "UPDATE issues SET evidence_json = ?, severity = ?, last_seen_at = ?"
                             " WHERE id = ?",
-                            (evidence_json, severity, existing_id),
+                            (evidence_json, severity, now, existing_id),
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE issues SET severity = ?, last_seen_at = ? WHERE id = ?",
+                            (severity, now, existing_id),
                         )
                     return existing_id
             cur = conn.execute(
-                "INSERT INTO issues(opened_at, severity, kind, eui64, evidence_json)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (now, severity, kind, eui64, evidence_json),
+                "INSERT INTO issues(opened_at, severity, kind, eui64, evidence_json, first_seen_at, last_seen_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (now, severity, kind, eui64, evidence_json, now, now),
             )
             return int(cur.lastrowid or 0)
 
     def close_issue(self, issue_id: int) -> bool:
+        now = _utc_now()
         with self._tx() as conn:
             cur = conn.execute(
-                "UPDATE issues SET closed_at = ? WHERE id = ? AND closed_at IS NULL",
-                (_utc_now(), issue_id),
+                "UPDATE issues SET closed_at = ?, last_seen_at = ?"
+                " WHERE id = ? AND closed_at IS NULL",
+                (now, now, issue_id),
             )
             return cur.rowcount > 0
 
@@ -2847,7 +2899,7 @@ class SQLiteStore:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM issues WHERE closed_at IS NULL"
-                " ORDER BY opened_at DESC, id DESC"
+                " ORDER BY COALESCE(last_seen_at, opened_at) DESC, id DESC"
             ).fetchall()
         out: list[dict[str, Any]] = []
         for r in rows:
@@ -2858,8 +2910,71 @@ class SQLiteStore:
                     d["evidence"] = json.loads(evj)
                 except Exception:  # noqa: BLE001
                     d["evidence"] = {"_raw": evj}
+            d["severity"] = _normalize_issue_severity(str(d.get("severity") or ""))
             out.append(d)
         return out
+
+    # -- issue observation accumulator ---------------------------------
+
+    def bump_issue_observation(
+        self,
+        *,
+        obs_key: str,
+        kind: str,
+        subject_eui64: str | None,
+        payload: dict[str, Any] | None = None,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Upsert an observation accumulator row and return its state."""
+        now_iso = now or _utc_now()
+        payload_json = json.dumps(payload) if payload is not None else None
+        with self._tx() as conn:
+            row = conn.execute(
+                "SELECT first_seen_at, last_seen_at, seen_count FROM issue_observations"
+                " WHERE obs_key = ?",
+                (obs_key,),
+            ).fetchone()
+            if row:
+                first_seen_at = str(row[0])
+                new_count = int(row[2] or 0) + 1
+                conn.execute(
+                    "UPDATE issue_observations"
+                    " SET last_seen_at = ?, seen_count = ?, payload_json = ?"
+                    " WHERE obs_key = ?",
+                    (now_iso, new_count, payload_json, obs_key),
+                )
+                return {
+                    "obs_key": obs_key,
+                    "kind": kind,
+                    "subject_eui64": subject_eui64,
+                    "first_seen_at": first_seen_at,
+                    "last_seen_at": now_iso,
+                    "seen_count": new_count,
+                    "payload": payload or {},
+                }
+            conn.execute(
+                "INSERT INTO issue_observations(obs_key, kind, subject_eui64, first_seen_at, last_seen_at, seen_count, payload_json)"
+                " VALUES (?, ?, ?, ?, ?, 1, ?)",
+                (obs_key, kind, subject_eui64, now_iso, now_iso, payload_json),
+            )
+            return {
+                "obs_key": obs_key,
+                "kind": kind,
+                "subject_eui64": subject_eui64,
+                "first_seen_at": now_iso,
+                "last_seen_at": now_iso,
+                "seen_count": 1,
+                "payload": payload or {},
+            }
+
+    def sweep_issue_observations(self, *, kind: str, last_seen_before: str) -> int:
+        """Delete accumulator rows that haven't been observed recently."""
+        with self._tx() as conn:
+            cur = conn.execute(
+                "DELETE FROM issue_observations WHERE kind = ? AND last_seen_at < ?",
+                (kind, last_seen_before),
+            )
+            return int(cur.rowcount or 0)
 
     def list_issues_in_window(
         self,
@@ -2897,6 +3012,7 @@ class SQLiteStore:
                     d["evidence"] = json.loads(evj)
                 except Exception:  # noqa: BLE001
                     d["evidence"] = {"_raw": evj}
+            d["severity"] = _normalize_issue_severity(str(d.get("severity") or ""))
             out.append(d)
         return out
 

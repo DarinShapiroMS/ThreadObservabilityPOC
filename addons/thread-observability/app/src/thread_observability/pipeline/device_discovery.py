@@ -1044,24 +1044,6 @@ async def _persist_matter_diagnostics(
     """
     rich = _LAST_MATTER_RICH_INFO
     if not rich:
-        # v0.9.43: even with no rich info this cycle (matter-server WS hiccup
-        # or a single empty poll), we MUST still reconcile the
-        # ``partition_split`` issue. Otherwise an issue opened on a prior
-        # cycle becomes immortal — it never sees a non-split observation
-        # again because the empty-rich early-return below would skip the
-        # close branch. Latent bug observed live as issue #54 hanging open
-        # after the partition had long since healed.
-        try:
-            active = [
-                i for i in s.list_active_issues()
-                if i.get("kind") == "partition_split"
-            ]
-            for issue in active:
-                s.close_issue(int(issue["id"]))
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "partition_split close-on-empty failed: %s", exc,
-            )
         return {
             "nodes_with_diagnostics": 0,
             "links_recorded": 0,
@@ -1589,33 +1571,6 @@ async def _persist_matter_diagnostics(
         }
         for pid, members in sorted(live_partitions.items())
     ]
-
-    # Open/close partition_split issue (now reasoning over live partitions only).
-    try:
-        active = [i for i in s.list_active_issues() if i.get("kind") == "partition_split"]
-        if split:
-            distinct_epids = sorted({
-                p["extended_pan_id"] for p in partition_summary
-                if p.get("extended_pan_id")
-            })
-            s.open_issue(
-                kind="partition_split",
-                severity="warning",
-                evidence={
-                    "partitions": partition_summary,
-                    "partition_count": len(live_partitions),
-                    # If partitions report different extended_pan_ids,
-                    # this is a credentials-mismatch (stale dataset on
-                    # one device) not an RF-fragmentation issue.
-                    "distinct_extended_pan_ids": distinct_epids,
-                    "credentials_mismatch_suspected": len(distinct_epids) > 1,
-                },
-            )
-        else:
-            for issue in active:
-                s.close_issue(int(issue["id"]))
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Failed to update partition_split issue: %s", exc)
 
     log.info(
         "diagnostics persisted: nodes=%d links=%d partitions=%d split=%s "

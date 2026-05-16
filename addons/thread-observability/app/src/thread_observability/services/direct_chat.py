@@ -768,17 +768,17 @@ def _compact_health_snapshot(result: dict[str, Any]) -> dict[str, Any]:
         "computed_at": data.get("computed_at") if isinstance(data, dict) else None,
         "status": data.get("status") if isinstance(data, dict) else None,
         "data_age_seconds": data.get("data_age_seconds") if isinstance(data, dict) else None,
-        "summary": {
-            "healthy_nodes": summary.get("healthy_nodes"),
-            "online_nodes": summary.get("online_nodes"),
-            "sleeping_nodes": summary.get("sleeping_nodes"),
-            "stale_nodes": summary.get("stale_nodes"),
-            "offline_nodes": summary.get("offline_nodes"),
-            "total_nodes": summary.get("total_nodes"),
-            "duplicate_physical_device_groups": summary.get("duplicate_physical_device_groups"),
-            "duplicate_physical_device_rows": summary.get("duplicate_physical_device_rows"),
-            "distinct_thread_networks": summary.get("distinct_thread_networks"),
-        },
+        # Flatten the load-bearing fields so prompt compaction doesn't
+        # collapse them behind a max-depth boundary.
+        "healthy_nodes": summary.get("healthy_nodes"),
+        "online_nodes": summary.get("online_nodes"),
+        "sleeping_nodes": summary.get("sleeping_nodes"),
+        "stale_nodes": summary.get("stale_nodes"),
+        "offline_nodes": summary.get("offline_nodes"),
+        "total_nodes": summary.get("total_nodes"),
+        "duplicate_physical_device_groups": summary.get("duplicate_physical_device_groups"),
+        "duplicate_physical_device_rows": summary.get("duplicate_physical_device_rows"),
+        "distinct_thread_networks": summary.get("distinct_thread_networks"),
         "active_issue_count": active_issues.get("count"),
         "active_issue_severity_counts": active_issues.get("by_severity"),
         "as_of": meta.get("as_of"),
@@ -1776,7 +1776,14 @@ async def direct_chat_turn(
                     "role": "tool",
                     "tool_call_id": tool_call["id"],
                     "content": _serialize_for_prompt(
-                        _tool_result_for_prompt(tool_call["name"], tool_call["arguments"], result),
+                        (
+                            {
+                                "data": _tool_result_for_prompt(tool_call["name"], tool_call["arguments"], result),
+                                **({"meta": result.get("meta")} if isinstance(result, dict) and isinstance(result.get("meta"), dict) else {}),
+                            }
+                            if isinstance(result, dict) and isinstance(result.get("data"), dict)
+                            else _tool_result_for_prompt(tool_call["name"], tool_call["arguments"], result)
+                        ),
                         max_chars=_MAX_TOOL_RESULT_MESSAGE_CHARS,
                     ),
                 }

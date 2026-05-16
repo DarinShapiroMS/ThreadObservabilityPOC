@@ -973,7 +973,7 @@ let graphSelection = null;
 let graphRefreshInFlight = false;
 const chatState = { conversationId: null, messages: [] };
 let nodesSort = { key: null, dir: 'asc' };  // null => server "worst first" default
-const SEV_RANK = { critical: 0, error: 0, warning: 1, warn: 1, info: 2, notice: 3 };
+const SEV_RANK = { critical: 0, crit: 0, error: 0, warning: 1, warn: 1, info: 2, notice: 3 };
 const ASSESSMENT_STATE_CLASS = {
   probation: 'good',
   relaxing: 'good',
@@ -1698,16 +1698,6 @@ function renderIssues(s) {
   const pillsHost = $('#issues-sev-pills');
   issuesBody.innerHTML = '';
   pillsHost.innerHTML = '';
-  // Issue detection is paused pending redesign (#5). The API returns
-  // `status: "placeholder"` until new rules ship. Render the note
-  // verbatim so users (and any AI consumer scraping the dashboard)
-  // don't read an empty list as "all clear".
-  if (s.issues && s.issues.status === 'placeholder') {
-    const note = s.issues.note
-      || 'Issue detection is paused pending redesign.';
-    issuesBody.appendChild(el('div', {class: 'muted', style: 'padding: 6px 0;'}, note));
-    return;
-  }
   const issues = ((s.issues && s.issues.issues) || []).slice();
   if (!issues.length) {
     issuesBody.appendChild(el('div', {class:'empty'}, 'No active issues.'));
@@ -1719,10 +1709,10 @@ function renderIssues(s) {
     const sev = (i.severity || 'info').toLowerCase();
     counts[sev] = (counts[sev] || 0) + 1;
   }
-  const order = ['critical', 'error', 'warning', 'warn', 'info', 'notice'];
+  const order = ['critical', 'crit', 'error', 'warning', 'warn', 'info', 'notice'];
   for (const k of order) {
     if (!counts[k]) continue;
-    const cls = (k === 'critical' || k === 'error') ? 'bad' : (k.startsWith('warn') ? 'warn' : 'muted');
+    const cls = (k === 'critical' || k === 'crit' || k === 'error') ? 'bad' : (k.startsWith('warn') ? 'warn' : 'muted');
     pillsHost.appendChild(el('span', {
       class: 'pill ' + cls,
       style: 'margin-left:4px;',

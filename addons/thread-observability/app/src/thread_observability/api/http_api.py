@@ -866,20 +866,6 @@ def create_core_app() -> FastAPI:
 
     @app.get("/v1/issues/active")
     def list_active_issues() -> dict[str, object]:
-        # Issue detection is paused pending redesign — see tracking
-        # issue #5 and placeholder issue #4. We deliberately return an
-        # empty list with an explicit ``status: "placeholder"`` so
-        # consumers (dashboard, MCP, AI reasoners) don't misread the
-        # absence of issues as "all clear".
-        from ..pipeline.reasoner import ISSUES_PAUSED, ISSUES_PAUSED_NOTE
-        if ISSUES_PAUSED:
-            return {
-                "count": 0,
-                "issues": [],
-                "status": "placeholder",
-                "note": ISSUES_PAUSED_NOTE,
-                "computed_at": _utc_now(),
-            }
         try:
             issues = get_store().list_active_issues()
             return {"count": len(issues), "issues": issues, "computed_at": _utc_now()}

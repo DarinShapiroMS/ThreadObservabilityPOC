@@ -69,6 +69,9 @@ def _evidence_implicates_eui(evidence: Any, eui64: str) -> bool:
     members = evidence.get("members")
     if isinstance(members, list) and eui64 in members:
         return True
+    involved = evidence.get("involved_eui64s")
+    if isinstance(involved, list) and eui64 in involved:
+        return True
     # Nested partitions[].members (partition_split shape).
     partitions = evidence.get("partitions")
     if isinstance(partitions, list):
@@ -77,6 +80,14 @@ def _evidence_implicates_eui(evidence: Any, eui64: str) -> bool:
                 continue
             part_members = part.get("members")
             if isinstance(part_members, list) and eui64 in part_members:
+                return True
+            sample = part.get("members_sample")
+            if isinstance(sample, list) and eui64 in sample:
+                return True
+    recent_changes = evidence.get("recent_partition_changes")
+    if isinstance(recent_changes, list):
+        for row in recent_changes:
+            if isinstance(row, dict) and row.get("eui64") == eui64:
                 return True
     return False
 
